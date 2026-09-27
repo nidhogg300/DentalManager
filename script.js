@@ -55,7 +55,7 @@ const DEFAULT_SETTINGS = {
   // Si la lista está vacía, cualquier cuenta autenticada puede verla (útil mientras
   // se configura por primera vez); en cuanto se agregue un correo, el acceso queda
   // restringido solo a los correos de esta lista.
-  financeAccess: ["delgadogabriel295@gmail.com"],
+  financeAccess: [],
   origins: [
     { id: 'o1', name: 'Referido', desc: 'Recomendado por otro paciente', active: true },
     { id: 'o2', name: 'Familia', desc: 'Familiar de paciente existente', active: true },
@@ -528,7 +528,13 @@ function setupChrome() {
   document.getElementById('sidebarOverlay').addEventListener('click', closeSidebar);
 
   const navFin = document.getElementById('navFinanzas');
-  if (navFin && !isFinanceAuthorized()) navFin.remove();
+  const lockIcon = document.getElementById('financeLockIcon');
+  if (navFin && lockIcon) {
+    const authorized = isFinanceAuthorized();
+    lockIcon.style.display = authorized ? 'none' : '';
+    navFin.classList.toggle('nav-locked', !authorized);
+    navFin.title = authorized ? '' : 'Acceso restringido: solo cuentas autorizadas';
+  }
 
   setupGlobalSearch();
 }
@@ -1184,7 +1190,17 @@ function financeTxCategoryLabel(tx) {
 
 function renderFinance() {
   if (!isFinanceAuthorized()) {
-    return emptyStateHtml('Acceso restringido', 'La información contable solo está disponible para las cuentas autorizadas por la clínica.');
+    return `
+    <div class="page-head">
+      <div><h1>Finanzas del Consultorio</h1><p class="subtitle">Información contable de la clínica</p></div>
+    </div>
+    <div class="locked-card">
+      <div class="locked-icon">
+        <svg viewBox="0 0 24 24" width="26" height="26"><rect x="5" y="10.5" width="14" height="9" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>
+      </div>
+      <h3>Acceso restringido</h3>
+      <p>La información contable solo está disponible para las cuentas autorizadas por la clínica. Si necesitas acceso, pide a un administrador que agregue tu correo en Configuración → Acceso a Finanzas.</p>
+    </div>`;
   }
   const settings = getSettings();
   const patients = getPatients();
@@ -1378,16 +1394,18 @@ const SETTINGS_TABS = [
   { key: 'taskTypes', label: 'Tipos de seguimiento' },
   { key: 'staff', label: 'Miembros del equipo' },
   { key: 'inactivityReasons', label: 'Motivos de inactividad' },
+  { key: 'financeAccess', label: 'Acceso a Finanzas' },
 ];
-
 let settingsActiveTab = 'statuses';
-
 function renderSettings() {
+  if (settingsActiveTab === 'financeAccess' && !isFinanceAuthorized()) settingsActiveTab = 'statuses';
   const settings = getSettings();
   const items = settings[settingsActiveTab] || [];
   const tabInfo = SETTINGS_TABS.find(t => t.key === settingsActiveTab);
   const isTreatments = settingsActiveTab === 'treatments';
   const isCosts = settingsActiveTab === 'fixedCosts';
+  const isAccess = settingsActiveTab === 'financeAccess';
+  const visibleTabs = SETTINGS_TABS.filter(t => t.key !== 'financeAccess' || isFinanceAuthorized());
 
   return `
   <div class="page-head">
@@ -1395,25 +1413,25 @@ function renderSettings() {
   </div>
 
   <div class="tabs">
-    ${SETTINGS_TABS.map(t => `<button class="tab-item ${t.key === settingsActiveTab ? 'active' : ''}" data-settings-tab="${t.key}">${t.label}</button>`).join('')}
+    ${visibleTabs.map(t => `<button class="tab-item ${t.key === settingsActiveTab ? 'active' : ''}" data-settings-tab="${t.key}">${t.label}</button>`).join('')}
   </div>
 
   <div class="section-card">
     <div class="section-card-head">
       <div>
         <h3>${tabInfo.label}</h3>
-        <p class="text-faint" style="font-size:12.5px;margin-top:2px;">${isTreatments ? 'Los valores fijados aquí se usan como precio sugerido en Finanzas; edítalos solo cuando cambien.' : isCosts ? 'Los costos marcados como "fijos" se incluyen automáticamente cada mes en Finanzas, sin necesidad de volver a registrarlos.' : 'Define las opciones disponibles en los formularios del sistema'}</p>
+        <p class="text-faint" style="font-size:12.5px;margin-top:2px;">${isTreatments ? 'Los valores fijados aquí se usan como precio sugerido en Finanzas; edítalos solo cuando cambien.' : isCosts ? 'Los costos marcados como "fijos" se incluyen automáticamente cada mes en Finanzas, sin necesidad de volver a registrarlos.' : isAccess ? 'Solo las cuentas (correo de inicio de sesión) listadas aquí pueden ver la pestaña Finanzas. Si la lista está vacía, cualquier cuenta puede verla.' : 'Define las opciones disponibles en los formularios del sistema'}</p>
       </div>
-      <button class="btn btn-primary btn-sm" id="addOptionBtn">+ Agregar opción</button>
+      <button class="btn btn-primary btn-sm" id="addOptionBtn">+ Agregar ${isAccess ? 'correo' : 'opción'}</button>
     </div>
     <div class="section-card-body">
       ${items.length ? items.map(item => `
         <div class="settings-catalog-row">
           <div class="settings-catalog-left">
-            ${settingsActiveTab === 'statuses' ? badge(item.name, item.color) : `<strong>${escapeHtml(item.name)}</strong>`}
+            ${settingsActiveTab === 'statuses' ? badge(item.name, item.color) : isAccess ? `<strong>${escapeHtml(item.email)}</strong>` : `<strong>${escapeHtml(item.name)}</strong>`}
             ${isTreatments ? `<span class="settings-catalog-desc">Precio actual: ${formatCOP(item.price)}</span>` : ''}
             ${isCosts ? `<span class="settings-catalog-desc">${item.fixed ? 'Fijo mensual' : 'Variable'} · ${formatCOP(item.amount)}</span>` : ''}
-            ${item.desc ? `<span class="settings-catalog-desc">${escapeHtml(item.desc)}</span>` : ''}
+            ${item.desc && !isAccess ? `<span class="settings-catalog-desc">${escapeHtml(item.desc)}</span>` : ''}
             ${item.active === false ? `<span class="text-faint" style="font-size:11.5px;">Deshabilitado</span>` : ''}
           </div>
           <div class="settings-catalog-actions">
@@ -1427,16 +1445,20 @@ function renderSettings() {
 
   <div class="modal-overlay" id="optionModal">
     <div class="modal">
-      <h3 id="optionModalTitle">Agregar opción</h3>
+      <h3 id="optionModalTitle">Agregar ${isAccess ? 'correo' : 'opción'}</h3>
       <form id="optionForm">
         <input type="hidden" name="optionId">
-        <div class="field"><label>Nombre *</label><input type="text" name="name" required></div>
-        <div class="field mt-2"><label>Descripción</label><input type="text" name="desc"></div>
-        ${isTreatments ? `<div class="field mt-2"><label>Precio (COP) *</label><input type="number" min="0" step="1000" name="price" required></div>` : ''}
-        ${isCosts ? `
-          <div class="field mt-2"><label>Valor mensual (COP) *</label><input type="number" min="0" step="1000" name="amount" required></div>
-          <div class="checkbox-row mt-2"><input type="checkbox" id="optFixed" name="fixed"><label for="optFixed">Es un costo fijo (se repite todos los meses automáticamente)</label></div>
-        ` : ''}
+        ${isAccess ? `
+          <div class="field"><label>Correo autorizado *</label><input type="email" name="email" required placeholder="doctora@clinica.com"></div>
+        ` : `
+          <div class="field"><label>Nombre *</label><input type="text" name="name" required></div>
+          <div class="field mt-2"><label>Descripción</label><input type="text" name="desc"></div>
+          ${isTreatments ? `<div class="field mt-2"><label>Precio (COP) *</label><input type="number" min="0" step="1000" name="price" required></div>` : ''}
+          ${isCosts ? `
+            <div class="field mt-2"><label>Valor mensual (COP) *</label><input type="number" min="0" step="1000" name="amount" required></div>
+            <div class="checkbox-row mt-2"><input type="checkbox" id="optFixed" name="fixed"><label for="optFixed">Es un costo fijo (se repite todos los meses automáticamente)</label></div>
+          ` : ''}
+        `}
         <div class="form-actions">
           <button type="button" class="btn btn-secondary" id="cancelOptionModal">Cancelar</button>
           <button type="submit" class="btn btn-primary">Guardar</button>
