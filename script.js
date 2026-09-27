@@ -46,9 +46,9 @@ const DEFAULT_SETTINGS = {
   // volver a registrarlo manualmente; "fixed: false" sirve para costos variables que sí
   // se ingresan mes a mes desde la pestaña Finanzas.
   fixedCosts: [
-    { id: 'c1', name: 'Arriendo del consultorio', desc: '', amount: 0, fixed: true, active: true },
-    { id: 'c2', name: 'Nómina / Personal', desc: '', amount: 0, fixed: true, active: true },
-    { id: 'c3', name: 'Servicios públicos', desc: '', amount: 0, fixed: true, active: true },
+    { id: 'c1', name: 'Nómina / Personal', desc: '', amount: 0, fixed: true, active: true },
+    { id: 'c2', name: 'Servicios públicos', desc: '', amount: 0, fixed: true, active: true },
+    { id: 'c3', name: 'Internet / suscripciones', desc: '', amount: 0, fixed: true, active: true },
     { id: 'c4', name: 'Insumos y materiales', desc: 'Costo variable, se registra cada mes', amount: 0, fixed: false, active: true },
   ],
   // Correos autorizados para ver/editar la información contable (pestaña Finanzas).
