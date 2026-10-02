@@ -1604,14 +1604,21 @@ function attachViewHandlers(parts) {
     });
   }
   if (route === 'pacientes' && parts[1] === 'nuevo') {
-    document.querySelectorAll('#treatmentChips .chip-toggle').forEach(chip => {
-      const cb = chip.querySelector('input[type=checkbox]');
-      chip.addEventListener('click', (e) => {
-        e.preventDefault(); // evita que el navegador lo marque dos veces (nativo + nuestro código)
+    const chipsBox = document.getElementById('treatmentChips');
+    if (chipsBox) {
+      chipsBox.addEventListener('click', (e) => {
+        const chip = e.target.closest('.chip-toggle');
+        if (!chip) return;
+        e.preventDefault();
+        const cb = chip.querySelector('input[type=checkbox]');
         cb.checked = !cb.checked;
         chip.classList.toggle('active', cb.checked);
+        chip.style.background = cb.checked ? '#0e7490' : '';
+        chip.style.borderColor = cb.checked ? '#0e7490' : '';
+        chip.style.color = cb.checked ? '#fff' : '';
+        chip.style.fontWeight = cb.checked ? '600' : '';
       });
-    });
+    }
     document.getElementById('patientForm').addEventListener('submit', (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -1633,14 +1640,21 @@ function attachViewHandlers(parts) {
     });
   }
   if (route === 'pacientes' && parts[1] && parts[2] === 'editar') {
-    document.querySelectorAll('#treatmentChips .chip-toggle').forEach(chip => {
-      const cb = chip.querySelector('input[type=checkbox]');
-      chip.addEventListener('click', (e) => {
-        e.preventDefault(); // evita que el navegador lo marque dos veces (nativo + nuestro código)
+    const chipsBox = document.getElementById('treatmentChips');
+    if (chipsBox) {
+      chipsBox.addEventListener('click', (e) => {
+        const chip = e.target.closest('.chip-toggle');
+        if (!chip) return;
+        e.preventDefault();
+        const cb = chip.querySelector('input[type=checkbox]');
         cb.checked = !cb.checked;
         chip.classList.toggle('active', cb.checked);
+        chip.style.background = cb.checked ? '#0e7490' : '';
+        chip.style.borderColor = cb.checked ? '#0e7490' : '';
+        chip.style.color = cb.checked ? '#fff' : '';
+        chip.style.fontWeight = cb.checked ? '600' : '';
       });
-    });
+    }
     document.getElementById('patientForm').addEventListener('submit', (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
