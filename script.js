@@ -874,6 +874,7 @@ function renderPatientProfile(id) {
 
   <div class="two-col">
     <div>
+      ${oralHealthWidget(patient)}
       <div class="section-card">
         <div class="section-card-head"><h3>Notas Generales de Gestión</h3></div>
         <div class="section-card-body">
@@ -922,7 +923,6 @@ function renderPatientProfile(id) {
           <div class="info-row"><span class="info-label">Última Visita</span><span class="info-value">${patient.lastVisit ? formatDate(patient.lastVisit) : '—'}</span></div>
         </div>
       </div>
-      ${oralHealthWidget(patient)}
     </div>
   </div>
 
