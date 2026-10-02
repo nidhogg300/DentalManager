@@ -433,13 +433,33 @@ function save() {
   render();
 }
 
+// Busca el cliente de Supabase sin importar cómo lo declare supabase-config.js:
+// window.supabaseClient, "const supabaseClient" global, o el del documento padre.
+function getSupabase() {
+  if (window.supabaseClient) return window.supabaseClient;
+  try {
+    if (typeof supabaseClient !== 'undefined' && supabaseClient) {
+      window.supabaseClient = supabaseClient;
+      return window.supabaseClient;
+    }
+  } catch (e) { /* ignorar */ }
+  try {
+    if (window.parent && window.parent !== window && window.parent.supabaseClient) {
+      window.supabaseClient = window.parent.supabaseClient;
+      return window.supabaseClient;
+    }
+  } catch (e) { /* distinto origen: sin acceso al padre */ }
+  return null;
+}
+
 async function loadInitial() {
-  if (!PATIENT_ID || !window.supabaseClient) {
+  const sb = getSupabase();
+  if (!PATIENT_ID || !sb) {
     data = PATIENT_ID ? emptyPatientData(PATIENT_NAME_HINT) : demoData();
     return 'patient';
   }
   try {
-    const { data: row, error } = await window.supabaseClient
+    const { data: row, error } = await sb
       .from('patients')
       .select('full_name, dental_map')
       .eq('id', PATIENT_ID)
@@ -471,8 +491,9 @@ async function persistToSupabase() {
     console.error('Error al guardar: PATIENT_ID no está definido o es nulo.');
     return { ok: false, reason: 'missing_patient_id' };
   }
-  if (!window.supabaseClient) {
-    console.error('Error al guardar: window.supabaseClient no está disponible.');
+  const sb = getSupabase();
+  if (!sb) {
+    console.error('Error al guardar: no se encontró el cliente de Supabase (revisa que dentograma.html cargue supabase-config.js).');
     return { ok: false, reason: 'missing_supabase_client' };
   }
 
@@ -487,7 +508,7 @@ async function persistToSupabase() {
 
   try {
     // 2. Ejecutar actualización con .select() para confirmar respuesta
-    const { data: updatedRows, error } = await window.supabaseClient
+    const { data: updatedRows, error } = await sb
       .from('patients')
       .update({ dental_map: payload })
       .eq('id', PATIENT_ID)
@@ -2678,80 +2699,51 @@ function bindUI() {
 
   let saveArmed = null;
   const btnSave = $('#btnSave');
-
-  if (btnSave) {
-  console.log('Botón #btnSave encontrado en el DOM.'); // Verificar si encuentra el botón
-  
-  btnSave.addEventListener('click', async event => {
-    console.log('Clic detectado en el botón guardar.'); // Verificar si escucha el clic
-
-    const button = event.currentTarget;
-
-    if (!saveArmed) {
-      console.log('Primer clic: Armando confirmación...');
-      button.textContent = '¿Seguro? Toca otra vez';
-      button.classList.add('warn');
-      saveArmed = setTimeout(() => {
-        saveArmed = null;
-        button.textContent = 'Guardar cambios';
-        button.classList.remove('warn');
-      }, 3000);
-      return;
-    }
-
-    console.log('Segundo clic: Ejecutando persistToSupabase()...');
-    clearTimeout(saveArmed);
-    saveArmed = null;
-    button.classList.remove('warn');
-    button.textContent = 'Guardando...';
-    button.disabled = true;
-
-    // Llamada real al guardado
-    const result = await persistToSupabase();
-
-    button.disabled = false;
-    button.textContent = 'Guardar cambios';
-    
-    if (saveStatus) {
-      saveStatus.textContent = result.ok ? 'Cambios guardados ✓' : 'No se pudo guardar. Intenta de nuevo.';
-      setTimeout(() => { if (saveStatus) saveStatus.textContent = ''; }, 3000);
-    }
-  });
-} else {
-  console.error('No se encontró el elemento #btnSave en el HTML.');
-}
-
   const saveStatus = $('#saveStatus');
 
-  if (btnSave) btnSave.addEventListener('click', async event => {
-    const button = event.currentTarget;
+  if (btnSave) {
+    btnSave.addEventListener('click', async event => {
+      const button = event.currentTarget;
 
-    if (!saveArmed) {
-      button.textContent = '¿Seguro? Toca otra vez';
-      button.classList.add('warn');
-      saveArmed = setTimeout(() => {
-        saveArmed = null;
-        button.textContent = 'Guardar cambios';
-        button.classList.remove('warn');
-      }, 3000);
-      return;
-    }
+      // Primer toque: pide confirmación.
+      if (!saveArmed) {
+        button.textContent = '¿Seguro? Toca otra vez';
+        button.classList.add('warn');
+        saveArmed = setTimeout(() => {
+          saveArmed = null;
+          button.textContent = 'Guardar cambios';
+          button.classList.remove('warn');
+        }, 3000);
+        return;
+      }
 
-    clearTimeout(saveArmed);
-    saveArmed = null;
-    button.classList.remove('warn');
-    button.textContent = 'Guardando...';
-    button.disabled = true;
+      // Segundo toque: guarda.
+      clearTimeout(saveArmed);
+      saveArmed = null;
+      button.classList.remove('warn');
+      button.textContent = 'Guardando...';
+      button.disabled = true;
 
-    const result = await persistToSupabase();
+      const result = await persistToSupabase();
 
-    button.disabled = false;
-    button.textContent = 'Guardar cambios';
-    if (saveStatus) {
-      saveStatus.textContent = result.ok ? 'Cambios guardados ✓' : 'No se pudo guardar. Intenta de nuevo.';
-      setTimeout(() => { if (saveStatus) saveStatus.textContent = ''; }, 3000);
-    }
-  });
+      button.disabled = false;
+      button.textContent = 'Guardar cambios';
+
+      if (saveStatus) {
+        const reasons = {
+          missing_patient_id: 'falta el ID del paciente en la URL.',
+          missing_supabase_client: 'no hay conexión con Supabase.',
+          no_rows_updated: 'Supabase no permitió la actualización (revisa RLS / permisos).'
+        };
+        saveStatus.textContent = result.ok
+          ? 'Cambios guardados ✓'
+          : 'No se pudo guardar: ' + (reasons[result.reason] || (result.error && result.error.message) || 'error desconocido');
+        setTimeout(() => { saveStatus.textContent = ''; }, 6000);
+      }
+    });
+  } else {
+    console.error('No se encontró el elemento #btnSave en el HTML.');
+  }
 
   // "Todos sanos": deja los 32 dientes en estado sano (conserva nombre,
   // fecha y observaciones generales). Pide confirmación con un segundo toque.
