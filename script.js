@@ -13,7 +13,6 @@ const STORAGE_KEYS = {
   patients: 'dm_patients',
   followUps: 'dm_followups',
   financeTx: 'dm_finance_tx',
-  dentalRecords: 'dm_dental_records',
   settings: 'dm_settings',
 };
 
@@ -46,9 +45,9 @@ const DEFAULT_SETTINGS = {
   // volver a registrarlo manualmente; "fixed: false" sirve para costos variables que sí
   // se ingresan mes a mes desde la pestaña Finanzas.
   fixedCosts: [
-    { id: 'c1', name: 'Nómina / Personal', desc: '', amount: 0, fixed: true, active: true },
-    { id: 'c2', name: 'Servicios públicos', desc: '', amount: 0, fixed: true, active: true },
-    { id: 'c3', name: 'Internet / suscripciones', desc: '', amount: 0, fixed: true, active: true },
+    { id: 'c1', name: 'Arriendo del consultorio', desc: '', amount: 0, fixed: true, active: true },
+    { id: 'c2', name: 'Nómina / Personal', desc: '', amount: 0, fixed: true, active: true },
+    { id: 'c3', name: 'Servicios públicos', desc: '', amount: 0, fixed: true, active: true },
     { id: 'c4', name: 'Insumos y materiales', desc: 'Costo variable, se registra cada mes', amount: 0, fixed: false, active: true },
   ],
   // Correos autorizados para ver/editar la información contable (pestaña Finanzas).
@@ -89,8 +88,10 @@ const DEFAULT_SETTINGS = {
     { id: 'r5', name: 'Otro', desc: '', active: true },
   ],
   staff: [
-    { id: 's1', name: 'Dra. Martha Contreras', desc: 'Gerente', active: true },
-    { id: 's2', name: 'Dra. Alejandra', desc: 'Odontóloga', active: true }
+    { id: 's1', name: 'Dra. Carolina Gómez', desc: 'Administradora', active: true },
+    { id: 's2', name: 'Dr. Sergio Plaza', desc: 'Odontólogo', active: true },
+    { id: 's3', name: 'Dra. Ana Martínez', desc: 'Odontóloga', active: true },
+    { id: 's4', name: 'Aux. Sandra Patiño', desc: 'Auxiliar clínica', active: true },
   ],
 };
 
@@ -104,7 +105,7 @@ const DEFAULT_SETTINGS = {
    la escritura remota falla, se avisa pero no se revierte la UI local
    (para eso, recarga la página y vuelve a intentar).
    ========================================================================= */
-const CACHE = { patients: [], followUps: [], financeTx: [], dentalRecords: [], settings: DEFAULT_SETTINGS, ready: false, userEmail: null };
+const CACHE = { patients: [], followUps: [], financeTx: [], settings: DEFAULT_SETTINGS, ready: false, userEmail: null };
 
 function uid(prefix) {
   // Se usa como id temporal antes de tener respuesta de Supabase; para
@@ -125,6 +126,7 @@ function mapPatientRow(r) {
     id: r.id, fullName: r.full_name, status: r.status, phone: r.phone, email: r.email,
     origin: r.origin, treatment: r.treatment, responsible: r.responsible, cedula: r.cedula,
     address: r.address, notes: r.notes, lastVisit: r.last_visit, createdAt: r.created_at,
+    dentalMap: r.dental_map || null,
   };
 }
 function mapFollowUpRow(r) {
@@ -141,12 +143,7 @@ function mapFinanceRow(r) {
     date: r.date, createdAt: r.created_at,
   };
 }
-function mapDentalRecordRow(r) {
-  return {
-    id: r.id, patientId: r.patient_id, tooth: r.tooth, careType: r.care_type,
-    notes: r.notes, createdAt: r.created_at,
-  };
-}
+
 
 /* Carga inicial: trae todo de Supabase y llena el caché en memoria.
    Se llama una sola vez, después de confirmar sesión, antes del primer router(). */
@@ -154,23 +151,20 @@ async function loadAllData() {
   const { data: { user } } = await supabaseClient.auth.getUser();
   CACHE.userEmail = (user && user.email) ? user.email.toLowerCase() : null;
 
-  const [patientsRes, followUpsRes, financeRes, dentalRes, settingsRes] = await Promise.all([
+  const [patientsRes, followUpsRes, financeRes, settingsRes] = await Promise.all([
     supabaseClient.from('patients').select('*').order('created_at', { ascending: false }),
     supabaseClient.from('follow_ups').select('*').order('created_at', { ascending: false }),
     supabaseClient.from('finance_transactions').select('*').order('date', { ascending: false }),
-    supabaseClient.from('dental_records').select('*').order('created_at', { ascending: false }),
     supabaseClient.from('app_settings').select('data').eq('id', 1).single(),
   ]);
   if (patientsRes.error) reportSyncError('cargar pacientes', patientsRes.error);
   if (followUpsRes.error) reportSyncError('cargar seguimientos', followUpsRes.error);
   if (financeRes.error) reportSyncError('cargar finanzas', financeRes.error);
-  if (dentalRes.error) reportSyncError('cargar registros dentales', dentalRes.error);
   if (settingsRes.error) reportSyncError('cargar configuración', settingsRes.error);
 
   CACHE.patients = (patientsRes.data || []).map(mapPatientRow);
   CACHE.followUps = (followUpsRes.data || []).map(mapFollowUpRow);
   CACHE.financeTx = (financeRes.data || []).map(mapFinanceRow);
-  CACHE.dentalRecords = (dentalRes.data || []).map(mapDentalRecordRow);
   CACHE.settings = { ...DEFAULT_SETTINGS, ...((settingsRes.data && settingsRes.data.data) || {}) };
   CACHE.ready = true;
 }
@@ -298,42 +292,57 @@ function deleteFinanceTx(id) {
     .then(({ error }) => { if (error) reportSyncError('eliminar movimiento financiero', error); });
 }
 
-// --- Salud dental (caries por paciente) ---
-function getDentalRecordsByPatient(patientId) { return CACHE.dentalRecords.filter(d => d.patientId === patientId); }
-function createDentalRecord(data) {
-  const rec = {
-    id: newId(),
-    patientId: data.patientId,
-    tooth: data.tooth || '',
-    careType: data.careType || '',
-    notes: data.notes || '',
-    createdAt: new Date().toISOString(),
-  };
-  CACHE.dentalRecords.unshift(rec);
-  supabaseClient.from('dental_records').insert({
-    id: rec.id, patient_id: rec.patientId, tooth: rec.tooth, care_type: rec.careType,
-    notes: rec.notes, created_at: rec.createdAt,
-  }).then(({ error }) => { if (error) reportSyncError('guardar registro dental', error); });
-  return rec;
+// --- Salud dental (Dentograma 3D) ---
+// Los datos del dentograma viven comprimidos en patients.dental_map (jsonb):
+// { name, date, general, s: {diente: código}, x: {diente: 'códigos previos'}, t: {diente: nota corta} }
+// Esta es la misma forma de datos que usa dentograma-app.js, para que el cálculo
+// del % de salud oral sea idéntico en ambos lugares.
+const DENTAL_HEALTH_WEIGHT = { S: 0, C: 0.90, F: 0.65, T: 0.30, A: 0.50, E: 0.20, O: 0.12, K: 0.10, I: 0.12 };
+const DENTAL_ACTIVE_LOAD = { C: 1, F: 0.7, T: 0.35 };
+const DENTAL_MAX_LOAD_PER_TOOTH = 1.3;
+const DENTAL_ACTIVE_SEVERITY = 0.15;
+const DENTAL_ALL_TEETH = [18, 17, 16, 15, 14, 13, 12, 11, 21, 22, 23, 24, 25, 26, 27, 28, 48, 47, 46, 45, 44, 43, 42, 41, 31, 32, 33, 34, 35, 36, 37, 38];
+function dentalCondsOf(map, n) {
+  const last = (map.s || {})[n];
+  if (!last || last === 'S') return [];
+  const earlier = (map.x && map.x[n]) ? String(map.x[n]).split('') : [];
+  const list = [];
+  earlier.concat(last).forEach(code => {
+    const at = list.indexOf(code);
+    if (at >= 0) list.splice(at, 1);
+    list.push(code);
+  });
+  return list;
 }
-function deleteDentalRecord(id) {
-  CACHE.dentalRecords = CACHE.dentalRecords.filter(d => d.id !== id);
-  supabaseClient.from('dental_records').delete().eq('id', id)
-    .then(({ error }) => { if (error) reportSyncError('eliminar registro dental', error); });
+function dentalIsThirdMolar(n) { return Number(n) % 10 === 8; }
+function dentalToothHealth(map, n) {
+  let health = 1;
+  dentalCondsOf(map, n).forEach(code => { health *= 1 - (DENTAL_HEALTH_WEIGHT[code] ?? 0); });
+  return health;
 }
-const TOTAL_TEETH = 32;
-const CARE_TYPES = [
-  { id: 'superficial', name: 'Caries superficial', weight: 1 },
-  { id: 'moderada', name: 'Caries moderada', weight: 1 },
-  { id: 'profunda', name: 'Caries profunda', weight: 1 },
-  { id: 'tratada', name: 'Ya tratada / obturada', weight: 0 },
-];
-function careTypeLabel(id) { return (CARE_TYPES.find(c => c.id === id) || {}).name || id; }
-// % de dientes afectados = dientes distintos con caries activa (no "tratada") / total de dientes
-function dentalHealthPercent(patientId) {
-  const recs = getDentalRecordsByPatient(patientId);
-  const activeTeeth = new Set(recs.filter(r => r.careType !== 'tratada').map(r => r.tooth));
-  return TOTAL_TEETH ? Math.round((activeTeeth.size / TOTAL_TEETH) * 100) : 0;
+// Calcula el % de salud oral y la "banda" (good/mid/low/crit), igual que el dentograma 3D.
+function dentalHealthFromMap(dentalMap) {
+  const map = dentalMap || { s: {}, x: {} };
+  const considered = DENTAL_ALL_TEETH.filter(n => !(dentalIsThirdMolar(n) && dentalCondsOf(map, n).includes('A')));
+  let sum = 0, load = 0;
+  considered.forEach(n => {
+    sum += dentalToothHealth(map, n);
+    let toothLoad = 0;
+    dentalCondsOf(map, n).forEach(code => { toothLoad += DENTAL_ACTIVE_LOAD[code] ?? 0; });
+    load += Math.min(toothLoad, DENTAL_MAX_LOAD_PER_TOOTH);
+  });
+  const base = considered.length ? sum / considered.length : 1;
+  const factor = Math.exp(-DENTAL_ACTIVE_SEVERITY * load);
+  const score = Math.min(100, Math.max(0, Math.round(base * factor * 100)));
+  const band = score >= 85 ? 'good' : score >= 65 ? 'mid' : score >= 40 ? 'low' : 'crit';
+  return { score, band, hasData: !!(dentalMap && dentalMap.s && Object.keys(dentalMap.s).length) };
+}
+// Refresca en caché el dental_map de un paciente después de editarlo en el dentograma (iframe).
+async function refreshPatientDentalMap(patientId) {
+  const { data, error } = await supabaseClient.from('patients').select('dental_map').eq('id', patientId).single();
+  if (error) { reportSyncError('actualizar salud dental', error); return; }
+  const p = getPatientById(patientId);
+  if (p) p.dentalMap = (data && data.dental_map) || null;
 }
 
 // --- Settings ---
@@ -358,6 +367,11 @@ function updateSettingOption(category, id, data) {
   const idx = CACHE.settings[category].findIndex(o => o.id === id);
   if (idx === -1) return CACHE.settings;
   CACHE.settings[category][idx] = { ...CACHE.settings[category][idx], ...data };
+  persistSettings();
+  return CACHE.settings;
+}
+function deleteSettingOption(category, id) {
+  CACHE.settings[category] = CACHE.settings[category].filter(o => o.id !== id);
   persistSettings();
   return CACHE.settings;
 }
@@ -910,7 +924,7 @@ function renderPatientProfile(id) {
           <div class="info-row"><span class="info-label">Última Visita</span><span class="info-value">${patient.lastVisit ? formatDate(patient.lastVisit) : '—'}</span></div>
         </div>
       </div>
-      ${dentalHealthCard(patient)}
+      ${oralHealthWidget(patient)}
     </div>
   </div>
 
@@ -931,46 +945,29 @@ function renderPatientProfile(id) {
     </div>
   </div>
 
-  <!-- Salud dental: registrar caries -->
-  <div class="modal-overlay" id="dentalModal">
-    <div class="modal">
-      <h3>Registrar hallazgo dental</h3>
-      <form id="dentalForm">
-        <div class="field"><label>Diente (número FDI, ej: 16) *</label><input type="text" name="tooth" required placeholder="Ej: 16"></div>
-        <div class="field mt-2"><label>Tipo *</label><select name="careType" required>${CARE_TYPES.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}</select></div>
-        <div class="field mt-2"><label>Notas</label><input type="text" name="notes" placeholder="Detalle opcional"></div>
-        <div class="form-actions">
-          <button type="button" class="btn btn-secondary" id="cancelDentalModal">Cancelar</button>
-          <button type="submit" class="btn btn-primary">Guardar</button>
-        </div>
-      </form>
+  <!-- Dentograma 3D -->
+  <div class="modal-overlay dentogram-overlay" id="dentogramModal">
+    <div class="modal dentogram-modal">
+      <button type="button" class="dentogram-close" id="closeDentogramModal" aria-label="Cerrar">✕</button>
+      <iframe id="dentogramFrame" class="dentogram-frame" title="Dentograma 3D" loading="lazy"></iframe>
     </div>
   </div>
   `;
 }
-/* Tarjeta de salud dental: % de dientes con caries activa + lista de hallazgos */
-function dentalHealthCard(patient) {
-  const recs = getDentalRecordsByPatient(patient.id);
-  const pct = dentalHealthPercent(patient.id);
-  const healthy = 100 - pct;
+/* Pastilla de Salud Oral: usa el mismo estilo de anillo (y el titileo en rojo) del
+   dentograma 3D. Es seleccionable: al tocarla abre el dentograma completo. */
+function oralHealthWidget(patient) {
+  const h = dentalHealthFromMap(patient.dentalMap);
+  const bandLabel = { good: 'Buena', mid: 'Media', low: 'Baja', crit: 'Crítica' }[h.band];
   return `
-  <div class="section-card">
-    <div class="section-card-head">
-      <h3>Salud Dental</h3>
-      <button class="btn-link" id="addDentalBtn">+ Registrar caries</button>
-    </div>
-    <div class="section-card-body">
-      ${donutChart([
-        { label: 'Dientes sanos / tratados', value: healthy, color: 'var(--color-accent-green)' },
-        { label: 'Dientes con caries activa', value: pct, color: 'var(--color-accent-red)' },
-      ], 100)}
-      ${recs.length ? `<div class="mt-4">${recs.map(r => `
-        <div class="info-row">
-          <span class="info-label">Diente ${escapeHtml(r.tooth)} — ${careTypeLabel(r.careType)}${r.notes ? ' · ' + escapeHtml(r.notes) : ''}</span>
-          <button class="action-link muted del-dental-btn" data-id="${r.id}">Eliminar</button>
-        </div>`).join('')}</div>` : `<p class="text-faint mt-2" style="font-size:12.5px;">Sin hallazgos registrados. El porcentaje se calcula sobre ${TOTAL_TEETH} dientes.</p>`}
-    </div>
-  </div>`;
+  <button type="button" class="oral-health-card" id="openDentogramBtn" data-patient-id="${patient.id}" data-patient-name="${escapeHtml(patient.fullName)}">
+    <span class="oral-health-score" data-band="${h.band}" style="--pct:${h.score}" role="img" aria-label="Salud oral estimada">${h.hasData ? h.score : '—'}</span>
+    <span class="oral-health-info">
+      <strong>Salud Oral — ${h.hasData ? bandLabel : 'Sin evaluar'}</strong>
+      <span>${h.hasData ? 'Toca para abrir el dentograma 3D con el detalle de cada diente.' : 'Aún no se ha hecho la valoración dental. Toca para registrarla.'}</span>
+    </span>
+    <span class="oral-health-arrow">→</span>
+  </button>`;
 }
 function followUpStatusLabel(s) { return { pendiente: 'Pendiente', completado: 'Completado', cancelado: 'Cancelado' }[s] || s; }
 function followUpStatusColor(s) { return { pendiente: 'blue', completado: 'green', cancelado: 'gray' }[s] || 'gray'; }
@@ -1437,6 +1434,7 @@ function renderSettings() {
           <div class="settings-catalog-actions">
             <button class="action-link edit-option-btn" data-id="${item.id}">✎ Editar</button>
             <button class="action-link muted toggle-option-btn" data-id="${item.id}" style="color:${item.active === false ? 'var(--color-accent-green)' : 'var(--color-accent-red)'}">${item.active === false ? 'Habilitar' : 'Deshabilitar'}</button>
+            <button class="action-link muted delete-option-btn" data-id="${item.id}" data-name="${escapeHtml(isAccess ? item.email : item.name)}" style="color:var(--color-accent-red)">🗑 Eliminar</button>
           </div>
         </div>
       `).join('') : emptyStateHtml('Sin opciones configuradas', 'Agrega la primera opción para este catálogo.')}
@@ -1537,27 +1535,20 @@ function attachViewHandlers(parts) {
     const exportBtn = document.getElementById('exportHistoryBtn');
     if (exportBtn) exportBtn.addEventListener('click', () => showToast('Exportación de historial disponible próximamente'));
 
-    const dentalModal = document.getElementById('dentalModal');
-    const addDentalBtn = document.getElementById('addDentalBtn');
-    if (addDentalBtn) addDentalBtn.addEventListener('click', () => dentalModal.classList.add('open'));
-    const cancelDentalBtn = document.getElementById('cancelDentalModal');
-    if (cancelDentalBtn) cancelDentalBtn.addEventListener('click', () => dentalModal.classList.remove('open'));
-    const dentalForm = document.getElementById('dentalForm');
-    if (dentalForm) dentalForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const data = Object.fromEntries(fd.entries());
-      data.patientId = parts[1];
-      createDentalRecord(data);
-      dentalModal.classList.remove('open');
-      showToast('Hallazgo dental registrado');
+    const dentogramModal = document.getElementById('dentogramModal');
+    const dentogramFrame = document.getElementById('dentogramFrame');
+    const openBtn = document.getElementById('openDentogramBtn');
+    if (openBtn) openBtn.addEventListener('click', () => {
+      dentogramFrame.src = `dentograma.html?patient=${encodeURIComponent(openBtn.dataset.patientId)}&name=${encodeURIComponent(openBtn.dataset.patientName)}`;
+      dentogramModal.classList.add('open');
+    });
+    const closeDentogramBtn = document.getElementById('closeDentogramModal');
+    if (closeDentogramBtn) closeDentogramBtn.addEventListener('click', async () => {
+      dentogramModal.classList.remove('open');
+      dentogramFrame.src = 'about:blank';
+      await refreshPatientDentalMap(parts[1]);
       router();
     });
-    document.querySelectorAll('.del-dental-btn').forEach(b => b.addEventListener('click', () => {
-      deleteDentalRecord(b.dataset.id);
-      showToast('Registro eliminado');
-      router();
-    }));
   }
 
   if (route === 'seguimientos' && !parts[1]) {
@@ -1663,6 +1654,13 @@ function attachViewHandlers(parts) {
     document.querySelectorAll('.toggle-option-btn').forEach(b => b.addEventListener('click', () => {
       toggleSettingOption(settingsActiveTab, b.dataset.id);
       showToast('Catálogo actualizado');
+      router();
+    }));
+    document.querySelectorAll('.delete-option-btn').forEach(b => b.addEventListener('click', () => {
+      const ok = confirm(`¿Eliminar "${b.dataset.name}"? Esta acción no se puede deshacer. Los registros que ya usaban esta opción conservarán el valor guardado, pero dejará de aparecer en los formularios.`);
+      if (!ok) return;
+      deleteSettingOption(settingsActiveTab, b.dataset.id);
+      showToast('Opción eliminada');
       router();
     }));
     const cancelOpt = document.getElementById('cancelOptionModal');

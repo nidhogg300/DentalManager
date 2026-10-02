@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dentograma · Así están tus dientes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#EEF4F3; --panel:#FFFFFF; --ink:#12303A; --ink2:#48656D; --line:#D3E1DF;
+  --accent:#0E7C7B; --accent-ink:#FFFFFF; --field:#F3F8F7; --chip-empty:#E3ECEA;
+  --stage1:#1E4F56; --stage2:#0A2024; --alert:#D9483F;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0A181B; --panel:#112327; --ink:#E6F1EF; --ink2:#9BB6B2; --line:#23403F;
+    --accent:#3FC1BC; --accent-ink:#052321; --field:#0D1D20; --chip-empty:#1A3236;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0A181B; --panel:#112327; --ink:#E6F1EF; --ink2:#9BB6B2; --line:#23403F;
+  --accent:#3FC1BC; --accent-ink:#052321; --field:#0D1D20; --chip-empty:#1A3236;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:400 16px/1.5 'Figtree',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased}
+[hidden]{display:none !important}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+button{font-family:inherit}
+
+.wrap{max-width:1180px;margin:0 auto;padding:22px 18px 48px}
+.top{display:flex;flex-wrap:wrap;gap:14px 20px;align-items:flex-end;justify-content:space-between;margin-bottom:20px}
+.brand{font-size:14px;color:var(--ink2);margin:0 0 6px;font-weight:500}
+h1{margin:0;font:700 clamp(28px,4.4vw,42px)/1.05 'Bricolage Grotesque',system-ui,sans-serif;letter-spacing:-.025em}
+.lede{margin:8px 0 0;color:var(--ink2);max-width:52ch}
+.seg{display:inline-flex;background:var(--chip-empty);border-radius:999px;padding:3px;gap:2px}
+.seg button{border:0;background:transparent;color:var(--ink2);font-weight:600;font-size:14px;
+  padding:8px 14px;border-radius:999px;cursor:pointer;transition:background .15s,color .15s}
+.seg button[aria-pressed="true"]{background:var(--panel);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.18)}
+
+main{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:20px;align-items:start}
+@media (max-width:900px){main{grid-template-columns:minmax(0,1fr)}}
+.left{position:sticky;top:12px}
+@media (max-width:900px){.left{position:static}}
+
+.stage{position:relative;border-radius:24px;overflow:hidden;min-height:320px;aspect-ratio:1/0.92;
+  background:radial-gradient(110% 85% at 50% 32%,var(--stage1),var(--stage2))}
+@media (max-width:560px){.stage{aspect-ratio:1/1}}
+#gl{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+#gl.grabbing{cursor:grabbing}
+#gl.overtooth{cursor:pointer}
+.stage .views{position:absolute;top:12px;left:12px}
+.stage .views.seg{background:rgba(255,255,255,.13)}
+.stage .views button{color:#CFE4E2}
+.stage .views button[aria-pressed="true"]{background:#fff;color:#12303A}
+.hint{position:absolute;left:14px;bottom:12px;right:14px;margin:0;font-size:13px;color:rgba(230,244,242,.75);pointer-events:none}
+.tip{position:absolute;pointer-events:none;background:rgba(8,22,25,.92);color:#fff;border-radius:10px;
+  padding:7px 10px;font-size:13px;line-height:1.3;max-width:240px;transform:translate(12px,12px);z-index:3}
+.tip b{display:block;font-weight:600}
+.nogl{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;color:#CFE4E2}
+
+.side{background:var(--panel);border:1px solid var(--line);border-radius:24px;padding:6px 20px}
+.side>section{padding:18px 0;border-bottom:1px solid var(--line)}
+.side>section:last-child{border-bottom:0}
+h2{margin:0 0 4px;font:700 20px/1.2 'Bricolage Grotesque',system-ui,sans-serif;letter-spacing:-.01em}
+h3{margin:14px 0 6px;font-size:15px;font-weight:600}
+.muted{color:var(--ink2);font-size:14px;margin:0}
+.only-doctor{display:none}
+body.doctor .only-doctor{display:block}
+body.doctor .only-patient{display:none}
+
+.palette{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin:12px 0}
+.brush{display:flex;align-items:center;gap:8px;text-align:left;border:1.5px solid var(--line);background:var(--field);
+  color:var(--ink);border-radius:12px;padding:8px 10px;font-size:14px;font-weight:500;cursor:pointer}
+.brush[aria-pressed="true"]{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);font-weight:600}
+.dot{flex:0 0 14px;width:14px;height:14px;border-radius:50%;border:1px solid rgba(0,0,0,.25);display:inline-block}
+label{display:block;font-size:13px;font-weight:600;color:var(--ink2);margin-top:10px}
+input[type=text],input[type=date],textarea{display:block;width:100%;margin-top:4px;padding:9px 11px;
+  border:1.5px solid var(--line);border-radius:10px;background:var(--field);color:var(--ink);font:400 15px 'Figtree',sans-serif}
+textarea{resize:vertical}
+.fields{display:grid;grid-template-columns:1.4fr 1fr;gap:10px}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.btn{border:1.5px solid var(--line);background:var(--field);color:var(--ink);border-radius:999px;padding:9px 16px;
+  font-weight:600;font-size:14px;cursor:pointer}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.warn{border-color:var(--alert);color:var(--alert)}
+
+.pname{margin:0}
+.pdate{margin:2px 0 0;color:var(--ink2);font-size:14px}
+.gnote{margin:10px 0 0;font-size:15px;padding-left:12px;border-left:3px solid var(--accent)}
+
+#headline{margin:0;font:700 21px/1.2 'Bricolage Grotesque',system-ui,sans-serif;letter-spacing:-.015em}
+#subline{margin:4px 0 0;color:var(--ink2);font-size:15px}
+.healthRow{display:flex;align-items:center;gap:18px}
+.healthScore{--pct:100;--band:#1E8A6E;position:relative;isolation:isolate;flex:0 0 auto;display:grid;
+  place-content:center;justify-items:center;width:104px;height:104px;border-radius:50%;
+  font:700 30px/1 'Bricolage Grotesque',system-ui,sans-serif;letter-spacing:-.02em;color:var(--band);
+  background:conic-gradient(var(--band) calc(var(--pct) * 1%),var(--chip-empty) 0)}
+.healthScore::before{content:'';position:absolute;inset:9px;border-radius:50%;background:var(--panel);z-index:-1}
+.healthScore::after{content:'SALUD ORAL';margin-top:5px;font:600 9px/1 'Figtree',system-ui,sans-serif;
+  letter-spacing:.1em;color:var(--ink2)}
+.healthScore[data-band="good"]{--band:#1E8A6E}
+.healthScore[data-band="mid"]{--band:#CE8B2C}
+.healthScore[data-band="low"]{--band:#E0572C}
+.healthScore[data-band="crit"]{--band:#D9483F}
+.healthRow[data-band="low"] #headline,.healthRow[data-band="crit"] #headline{color:var(--alert)}
+@media (prefers-reduced-motion:no-preference){
+  .healthScore[data-band="low"]{animation:healthPulse 2.2s ease-in-out infinite}
+  .healthScore[data-band="crit"]{animation:healthPulse 1.3s ease-in-out infinite}
+}
+@keyframes healthPulse{
+  0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--band) 45%,transparent)}
+  50%{box-shadow:0 0 0 14px color-mix(in srgb,var(--band) 0%,transparent)}
+}
+.healthNote{margin:12px 0 0;font-size:14px;color:var(--ink)}
+.healthNote strong{display:block;font-weight:600}
+.healthNote small{display:block;margin-top:4px;color:var(--ink2);font-size:12px;font-weight:400}
+.bar{display:flex;height:18px;border-radius:9px;overflow:hidden;margin:14px 0 10px;background:var(--chip-empty);
+  box-shadow:inset 0 0 0 1px var(--line)}
+.bar i{display:block;height:100%;transition:width .5s ease}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin:0;padding:0;list-style:none;font-size:14px}
+.legend li{display:flex;align-items:center;gap:6px}
+
+.mapcap{display:flex;justify-content:space-between;font-size:12px;color:var(--ink2);margin:10px 0 6px}
+.map{overflow-x:auto;padding:6px 2px 8px}
+.maprow{display:flex;gap:3px;min-width:470px}
+.maprow+.maprow{margin-top:8px}
+.chip{flex:1 1 0;min-width:0;height:36px;border:1.5px solid var(--line);border-radius:9px 9px 14px 14px;
+  font-weight:600;font-size:11.5px;cursor:pointer;padding:0;display:grid;place-items:center;transition:transform .12s}
+.maprow.lower .chip{border-radius:14px 14px 9px 9px}
+.chip{position:relative}
+.chip[data-multi]::after{content:"+" attr(data-multi);position:absolute;top:-5px;right:-3px;min-width:15px;
+  padding:0 3px;border-radius:8px;background:var(--ink);color:var(--panel);font:700 9px/15px 'Figtree',sans-serif;text-align:center}
+.chip:hover{transform:translateY(-2px)}
+.chip.attn{box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--alert)}
+.chip.sel{outline:3px solid var(--accent);outline-offset:2px}
+.chip[data-s="A"]{border-style:dashed}
+.spacer{flex:0 0 10px}
+
+#dBody{margin-top:10px}
+.dhead{display:flex;gap:10px;align-items:center}
+.dhead .dot{width:22px;height:22px;flex-basis:22px}
+.dhead strong{font-size:17px}
+#dState{margin:8px 0 0}
+#dNote{margin:6px 0 0;font-style:italic}
+
+.flist{list-style:none;margin:0;padding:0}
+.fitem{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;border:0;background:transparent;
+  color:var(--ink);padding:8px 6px;border-radius:10px;cursor:pointer}
+.fitem:hover{background:var(--field)}
+.fitem .dot{margin-top:5px}
+.fitem strong{font-weight:600}
+.fitem small{display:block;color:var(--ink2);font-size:13px}
+.okmsg{margin:0;color:var(--ink2)}
+
+@media (max-width:520px){.fields{grid-template-columns:1fr}}
+@media print{.stage .views,.seg,.tools,.hint{display:none !important}.left{position:static}}
+</style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <p class="brand">Consultorio Dra. [Nombre]</p>
+      <h1>Así están tus dientes</h1>
+      <p class="lede">Gira el modelo y toca un diente para ver qué encontró la doctora en tu primera valoración.</p>
+    </div>
+    <div class="seg" role="group" aria-label="Tipo de vista" id="modeSeg">
+      <button type="button" data-mode="patient" aria-pressed="true">Vista paciente</button>
+      <button type="button" data-mode="doctor" aria-pressed="false">Vista doctora</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="left">
+      <div class="stage" id="stage">
+        <canvas id="gl" aria-label="Modelo 3D de la dentadura. Usa el mapa de dientes para una versión accesible."></canvas>
+        <div id="selected-tooth" class="selected-tooth" aria-live="polite">Diente seleccionado: Ninguno</div>
+        <div class="views seg" role="group" aria-label="Arcada a mostrar" id="viewSeg">
+          <button type="button" data-view="both" aria-pressed="true">Ambas</button>
+          <button type="button" data-view="upper" aria-pressed="false">Superior</button>
+          <button type="button" data-view="lower" aria-pressed="false">Inferior</button>
+        </div>
+        <div class="tip" id="tip" hidden></div>
+        <p class="hint">Arrastra para girar · pellizca o usa la rueda para acercar · toca un diente</p>
+        <div class="nogl" id="nogl" hidden>Tu navegador no pudo mostrar el modelo 3D. Puedes ver todo en el mapa de dientes.</div>
+      </div>
+    </div>
+
+    <div class="side">
+      <section class="only-doctor tools" aria-label="Herramientas de la doctora">
+        <h2>Marcar hallazgos</h2>
+        <p class="muted">Elige qué marcar y toca los dientes en el modelo o en el mapa. Puedes combinar marcas en un mismo diente (por ejemplo endodoncia + corona): en el modelo se dibuja la última, y todas cuentan para el porcentaje. Si tocas una marca que el diente ya tiene, se quita solo esa. Ausente e implante no se combinan.</p>
+        <div class="palette" id="palette"></div>
+        <div class="fields">
+          <label>Paciente<input id="inName" type="text" autocomplete="off" maxlength="60"></label>
+          <label>Fecha<input id="inDate" type="date"></label>
+        </div>
+        <label>Observaciones generales<textarea id="inGeneral" rows="2" maxlength="300" placeholder="Ej: Se recomienda limpieza y control cada 6 meses."></textarea></label>
+        <div class="row">
+          <button type="button" class="btn" id="btnAllHealthy">Todos sanos</button>
+          <button type="button" class="btn primary" id="btnSave">Guardar cambios</button>
+        </div>
+        <p class="muted" id="saveStatus" style="margin-top:8px;"></p>
+      </section>
+
+      <section class="only-patient" id="pinfo">
+        <h2 class="pname" id="pname"></h2>
+        <p class="pdate" id="pdate"></p>
+        <p class="gnote" id="gnote" hidden></p>
+      </section>
+
+      <section aria-label="Resumen">
+        <div class="healthRow">
+          <span class="healthScore" id="healthScore" data-band="good" aria-label="Salud oral estimada" role="img">—</span>
+          <div>
+            <p id="headline"></p>
+            <p id="subline"></p>
+          </div>
+        </div>
+        <p class="healthNote" id="healthNote"></p>
+        <div class="bar" id="bar" role="img"></div>
+        <ul class="legend" id="legend"></ul>
+      </section>
+
+      <section aria-label="Mapa de dientes">
+        <h2>Mapa de dientes</h2>
+        <div class="mapcap"><span>Lado derecho del paciente</span><span>Lado izquierdo</span></div>
+        <div class="map">
+          <div class="maprow upper" id="rowUpper"></div>
+          <div class="maprow lower" id="rowLower"></div>
+        </div>
+      </section>
+
+      <section aria-label="Diente seleccionado" aria-live="polite">
+        <h2>Diente seleccionado</h2>
+        <p class="muted" id="dHint">Toca un diente en el modelo o en el mapa.</p>
+        <div id="dBody" hidden>
+          <div class="dhead"><span class="dot" id="dDot"></span><div><strong id="dTitle"></strong><div class="muted" id="dName"></div></div></div>
+          <p id="dState"></p>
+          <p id="dNote" class="only-patient"></p>
+          <label class="only-doctor">Nota corta para el paciente<input id="inNote" type="text" maxlength="80" placeholder="Ej: Tratar pronto"></label>
+        </div>
+      </section>
+
+      <section aria-label="Hallazgos">
+        <h2>Lo que encontramos</h2>
+        <div id="findings"></div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="supabase-config.js"></script>
+<script type="module" src="dentograma-app.js"></script>
+</body>
+</html>
