@@ -1603,8 +1603,15 @@ function attachViewHandlers(parts) {
       patientListPage = 1; filterPatientTable();
     });
   }
-
   if (route === 'pacientes' && parts[1] === 'nuevo') {
+    document.querySelectorAll('#treatmentChips .chip-toggle').forEach(chip => {
+      const cb = chip.querySelector('input[type=checkbox]');
+      chip.addEventListener('click', (e) => {
+        e.preventDefault(); // evita que el navegador lo marque dos veces (nativo + nuestro código)
+        cb.checked = !cb.checked;
+        chip.classList.toggle('active', cb.checked);
+      });
+    });
     document.getElementById('patientForm').addEventListener('submit', (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -1625,8 +1632,15 @@ function attachViewHandlers(parts) {
       }
     });
   }
-
   if (route === 'pacientes' && parts[1] && parts[2] === 'editar') {
+    document.querySelectorAll('#treatmentChips .chip-toggle').forEach(chip => {
+      const cb = chip.querySelector('input[type=checkbox]');
+      chip.addEventListener('click', (e) => {
+        e.preventDefault(); // evita que el navegador lo marque dos veces (nativo + nuestro código)
+        cb.checked = !cb.checked;
+        chip.classList.toggle('active', cb.checked);
+      });
+    });
     document.getElementById('patientForm').addEventListener('submit', (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -1638,9 +1652,6 @@ function attachViewHandlers(parts) {
       data.phoneCode = codeMatch ? codeMatch[1] : '+57';
       delete data.phoneCodeText;
       updatePatient(parts[1], data);
-      document.querySelectorAll('#treatmentChips .chip-toggle input').forEach(cb => {
-      cb.addEventListener('change', () => cb.closest('.chip-toggle').classList.toggle('active', cb.checked));
-      });
       document.getElementById('formAlert').innerHTML = `<div class="alert-success">✓ Cambios listos para guardar. Se ha verificado la información del expediente clínico.</div>`;
       showToast('Cambios guardados correctamente');
       setTimeout(() => { location.hash = `#/pacientes/${parts[1]}`; }, 700);
@@ -1653,9 +1664,6 @@ function attachViewHandlers(parts) {
     const cancelBtn = document.getElementById('cancelFollowUpModal');
     if (cancelBtn) cancelBtn.addEventListener('click', closeFollowUpModal);
     const form = document.getElementById('quickFollowUpForm');
-    document.querySelectorAll('#treatmentChips .chip-toggle input').forEach(cb => {
-      cb.addEventListener('change', () => cb.closest('.chip-toggle').classList.toggle('active', cb.checked));
-    });
     if (form) form.addEventListener('submit', (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
