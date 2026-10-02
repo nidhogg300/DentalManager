@@ -5,48 +5,7 @@
    so a future API/Supabase/Postgres backend can replace localStorage
    without touching the UI code.
    ========================================================================= */
-let globalCountries = [];
 
-// Función para obtener países desde REST Countries
-async function loadCountriesData() {
-  try {
-    const response = await fetch('https://restcountries.com/v3.1/all?fields=name,idd,translations');
-    const data = await response.json();
-
-    globalCountries = data
-      .map(c => {
-        // Formatear indicativo telefónico (ej: +57)
-        const root = c.idd?.root || '';
-        const suffix = c.idd?.suffixes?.[0] || '';
-        const phoneCode = root ? `${root}${suffix}` : '';
-
-        // Nombre en español o fallback al nombre común en inglés
-        const nameSpa = c.translations?.spa?.common || c.name?.common || '';
-
-        return {
-          name: nameSpa,
-          code: phoneCode
-        };
-      })
-      // Filtrar países que no tengan nombre o indicativo válido
-      .filter(c => c.name && c.code)
-      // Ordenar alfabéticamente por nombre
-      .sort((a, b) => a.name.localeCompare(b.name, 'es'));
-
-  } catch (error) {
-    console.error('Error cargando países desde la API, usando lista por defecto:', error);
-    // Fallback básico si falla la red o no hay internet
-    globalCountries = [
-      { name: 'Colombia', code: '+57' },
-      { name: 'Estados Unidos', code: '+1' },
-      { name: 'España', code: '+34' },
-      { name: 'México', code: '+52' }
-    ];
-  }
-}
-
-// Ejecutar la carga al inicializar la aplicación
-loadCountriesData();
 /* ============================ STORAGE KEYS ============================
    Ya no se usa localStorage: estas claves solo quedan como referencia
    histórica y para el caché en memoria de abajo (CACHE). */
@@ -136,6 +95,63 @@ const DEFAULT_SETTINGS = {
   ],
 };
 
+// Nombre en español + indicativo telefónico. Se usa tanto para el selector
+// de indicativo junto al teléfono como para el país de origen del paciente.
+const COUNTRIES = [
+['Afganistán','+93'],['Albania','+355'],['Alemania','+49'],['Andorra','+376'],['Angola','+244'],
+['Antigua y Barbuda','+1268'],['Arabia Saudita','+966'],['Argelia','+213'],['Argentina','+54'],
+['Armenia','+374'],['Australia','+61'],['Austria','+43'],['Azerbaiyán','+994'],['Bahamas','+1242'],
+['Bangladés','+880'],['Barbados','+1246'],['Baréin','+973'],['Bélgica','+32'],['Belice','+501'],
+['Benín','+229'],['Bielorrusia','+375'],['Bolivia','+591'],['Bosnia y Herzegovina','+387'],
+['Botsuana','+267'],['Brasil','+55'],['Brunéi','+673'],['Bulgaria','+359'],['Burkina Faso','+226'],
+['Burundi','+257'],['Bután','+975'],['Cabo Verde','+238'],['Camboya','+855'],['Camerún','+237'],
+['Canadá','+1'],['Catar','+974'],['Chad','+235'],['Chile','+56'],['China','+86'],['Chipre','+357'],
+['Colombia','+57'],['Comoras','+269'],['Corea del Norte','+850'],['Corea del Sur','+82'],
+['Costa de Marfil','+225'],['Costa Rica','+506'],['Croacia','+385'],['Cuba','+53'],['Dinamarca','+45'],
+['Dominica','+1767'],['Ecuador','+593'],['Egipto','+20'],['El Salvador','+503'],
+['Emiratos Árabes Unidos','+971'],['Eritrea','+291'],['Eslovaquia','+421'],['Eslovenia','+386'],
+['España','+34'],['Estados Unidos','+1'],['Estonia','+372'],['Esuatini','+268'],['Etiopía','+251'],
+['Filipinas','+63'],['Finlandia','+358'],['Fiyi','+679'],['Francia','+33'],['Gabón','+241'],
+['Gambia','+220'],['Georgia','+995'],['Ghana','+233'],['Granada','+1473'],['Grecia','+30'],
+['Guatemala','+502'],['Guinea','+224'],['Guinea-Bisáu','+245'],['Guinea Ecuatorial','+240'],
+['Guyana','+592'],['Haití','+509'],['Honduras','+504'],['Hungría','+36'],['India','+91'],
+['Indonesia','+62'],['Irak','+964'],['Irán','+98'],['Irlanda','+353'],['Islandia','+354'],
+['Islas Marshall','+692'],['Islas Salomón','+677'],['Israel','+972'],['Italia','+39'],
+['Jamaica','+1876'],['Japón','+81'],['Jordania','+962'],['Kazajistán','+7'],['Kenia','+254'],
+['Kirguistán','+996'],['Kiribati','+686'],['Kuwait','+965'],['Laos','+856'],['Lesoto','+266'],
+['Letonia','+371'],['Líbano','+961'],['Liberia','+231'],['Libia','+218'],['Liechtenstein','+423'],
+['Lituania','+370'],['Luxemburgo','+352'],['Macedonia del Norte','+389'],['Madagascar','+261'],
+['Malasia','+60'],['Malaui','+265'],['Maldivas','+960'],['Malí','+223'],['Malta','+356'],
+['Marruecos','+212'],['Mauricio','+230'],['Mauritania','+222'],['México','+52'],['Micronesia','+691'],
+['Moldavia','+373'],['Mónaco','+377'],['Mongolia','+976'],['Montenegro','+382'],['Mozambique','+258'],
+['Myanmar','+95'],['Namibia','+264'],['Nauru','+674'],['Nepal','+977'],['Nicaragua','+505'],
+['Níger','+227'],['Nigeria','+234'],['Noruega','+47'],['Nueva Zelanda','+64'],['Omán','+968'],
+['Países Bajos','+31'],['Pakistán','+92'],['Palaos','+680'],['Panamá','+507'],
+['Papúa Nueva Guinea','+675'],['Paraguay','+595'],['Perú','+51'],['Polonia','+48'],['Portugal','+351'],
+['Reino Unido','+44'],['República Centroafricana','+236'],['República Checa','+420'],
+['República del Congo','+242'],['República Democrática del Congo','+243'],
+['República Dominicana','+1809'],['Ruanda','+250'],['Rumania','+40'],['Rusia','+7'],['Samoa','+685'],
+['San Cristóbal y Nieves','+1869'],['San Marino','+378'],['San Vicente y las Granadinas','+1784'],
+['Santa Lucía','+1758'],['Santo Tomé y Príncipe','+239'],['Senegal','+221'],['Serbia','+381'],
+['Seychelles','+248'],['Sierra Leona','+232'],['Singapur','+65'],['Siria','+963'],['Somalia','+252'],
+['Sri Lanka','+94'],['Sudáfrica','+27'],['Sudán','+249'],['Sudán del Sur','+211'],['Suecia','+46'],
+['Suiza','+41'],['Surinam','+597'],['Tailandia','+66'],['Tanzania','+255'],['Tayikistán','+992'],
+['Timor Oriental','+670'],['Togo','+228'],['Tonga','+676'],['Trinidad y Tobago','+1868'],
+['Túnez','+216'],['Turkmenistán','+993'],['Turquía','+90'],['Tuvalu','+688'],['Ucrania','+380'],
+['Uganda','+256'],['Uruguay','+598'],['Uzbekistán','+998'],['Vanuatu','+678'],['Venezuela','+58'],
+['Vietnam','+84'],['Yemen','+967'],['Yibuti','+253'],['Zambia','+260'],['Zimbabue','+263'],
+];
+function countryCodeOptions(selected) {
+  return COUNTRIES.map(([name, code]) =>
+    `<option value="${code}" ${code === selected ? 'selected' : ''}>${escapeHtml(name)} (${code})</option>`
+  ).join('');
+}
+function countryNameOptions(selected) {
+  return COUNTRIES.map(([name]) =>
+    `<option value="${escapeHtml(name)}" ${name === selected ? 'selected' : ''}>${escapeHtml(name)}</option>`
+  ).join('');
+}
+
 /* ============================== DATA LAYER ==============================
    Respaldado por Supabase (Postgres). Para no reescribir todas las
    funciones de renderizado (que llaman getPatients()/getSettings()/etc.
@@ -168,6 +184,8 @@ function mapPatientRow(r) {
     origin: r.origin, treatment: r.treatment, responsible: r.responsible, cedula: r.cedula,
     address: r.address, notes: r.notes, lastVisit: r.last_visit, createdAt: r.created_at,
     dentalMap: r.dental_map || null,
+    phoneCode: r.phone_code || '+57',
+    countryOfOrigin: r.country_of_origin || 'Colombia',
   };
 }
 function mapFollowUpRow(r) {
@@ -238,6 +256,8 @@ function createPatient(data) {
     notes: data.notes || '',
     lastVisit: null,
     createdAt: new Date().toISOString(),
+    phoneCode: data.phoneCode || '+57',
+    countryOfOrigin: data.countryOfOrigin || 'Colombia',
   };
   CACHE.patients.unshift(patient);
   supabaseClient.from('patients').insert({
@@ -245,6 +265,7 @@ function createPatient(data) {
     email: patient.email, origin: patient.origin, treatment: patient.treatment,
     responsible: patient.responsible, cedula: patient.cedula, address: patient.address,
     notes: patient.notes, created_at: patient.createdAt,
+    phone_code: patient.phoneCode, country_of_origin: patient.countryOfOrigin,
   }).then(({ error }) => { if (error) reportSyncError('guardar paciente', error); });
   return patient;
 }
@@ -258,6 +279,7 @@ function updatePatient(id, data) {
     full_name: p.fullName, status: p.status, phone: p.phone, email: p.email, origin: p.origin,
     treatment: p.treatment, responsible: p.responsible, cedula: p.cedula, address: p.address,
     notes: p.notes, last_visit: p.lastVisit,
+    phone_code: p.phoneCode, country_of_origin: p.countryOfOrigin,
   }).eq('id', id).then(({ error }) => { if (error) reportSyncError('actualizar paciente', error); });
   return patients[idx];
 }
@@ -453,6 +475,22 @@ function optionsFor(list, selectedId) {
     `<option value="${o.id}" ${o.id === selectedId ? 'selected' : ''}>${escapeHtml(o.name)}</option>`
   ).join('');
 }
+
+function multiOptionsFor(list, selectedIds) {
+  return list.filter(o => o.active !== false).map(o =>
+    `<option value="${o.id}" ${selectedIds.includes(o.id) ? 'selected' : ''}>${escapeHtml(o.name)}</option>`
+  ).join('');
+}
+function treatmentLabels(csv) {
+  if (!csv) return '—';
+  const names = csv.split(',').filter(Boolean).map(treatmentLabel);
+  return names.length ? names.join(', ') : '—';
+}
+function patientPhoneDisplay(p) {
+  if (!p.phone) return '—';
+  return `${p.phoneCode || ''} ${p.phone}`.trim();
+}
+
 function showToast(message) {
   const toast = document.getElementById('toast');
   toast.textContent = message;
@@ -860,7 +898,7 @@ function filterPatientTable() {
       <tr data-id="${p.id}" class="patient-row">
         <td><div class="name-cell"><div class="avatar">${initials(p.fullName)}</div>${escapeHtml(p.fullName)}</div></td>
         <td>${badge(statusLabel(p.status), statusColor(p.status))}</td>
-        <td>${escapeHtml(treatmentLabel(p.treatment))}</td>
+        <td>${escapeHtml(treatmentLabels(p.treatment))}</td>
         <td>${escapeHtml(originLabel(p.origin))}</td>
         <td>${escapeHtml(staffLabel(p.responsible))}</td>
         <td>${p.lastVisit ? formatDate(p.lastVisit) : '—'}</td>
@@ -951,7 +989,7 @@ function renderPatientProfile(id) {
       <div class="section-card">
         <div class="section-card-head"><h3>Información de Contacto</h3></div>
         <div class="section-card-body">
-          <div class="info-row"><span class="info-label">Teléfono Móvil</span><span class="info-value">${escapeHtml(patient.phone || '—')}</span></div>
+          <div class="info-row"><span class="info-label">Teléfono Móvil</span><span class="info-value">${escapeHtml(patientPhoneDisplay(patient))}</span></div>
           <div class="info-row"><span class="info-label">Email</span><span class="info-value">${escapeHtml(patient.email || '—')}</span></div>
           <div class="info-row"><span class="info-label">Dirección de Residencia</span><span class="info-value">${escapeHtml(patient.address || '—')}</span></div>
           <div class="info-row"><span class="info-label">Documento de Identidad</span><span class="info-value">${escapeHtml(patient.cedula || '—')}</span></div>
@@ -962,7 +1000,7 @@ function renderPatientProfile(id) {
         <div class="section-card-body">
           <div class="info-row"><span class="info-label">Origen de Paciente</span><span class="info-value">${escapeHtml(originLabel(patient.origin))}</span></div>
           <div class="info-row"><span class="info-label">Responsable</span><span class="info-value">${escapeHtml(staffLabel(patient.responsible))}</span></div>
-          <div class="info-row"><span class="info-label">Tratamiento / Interés</span><span class="info-value">${escapeHtml(treatmentLabel(patient.treatment))}</span></div>
+          <div class="info-row"><span class="info-label">Tratamientos / Intereses</span><span class="info-value">${escapeHtml(treatmentLabels(patient.treatment))}</span></div>
           <div class="info-row"><span class="info-label">Última Visita</span><span class="info-value">${patient.lastVisit ? formatDate(patient.lastVisit) : '—'}</span></div>
         </div>
       </div>
@@ -1018,225 +1056,57 @@ function renderPatientForm(editId) {
   const isEdit = !!editId;
   const patient = isEdit ? getPatientById(editId) : null;
   if (isEdit && !patient) return emptyStateHtml('Paciente no encontrado', '');
-
   const settings = getSettings();
-
-  const selectedTreatments = (patient?.treatment || '')
-    .split(',')
-    .map(t => t.trim())
-    .filter(Boolean);
-
-  // Si aún no han cargado los países de la API, usamos un array básico de contingencia
-  const countriesList = globalCountries.length > 0 
-    ? globalCountries 
-    : [
-        { name: 'Colombia', code: '+57' },
-        { name: 'Estados Unidos', code: '+1' },
-        { name: 'España', code: '+34' },
-        { name: 'México', code: '+52' }
-      ];
-
-  const selectedCountryCode = patient?.phoneCountryCode || '+57';
 
   return `
   <div class="page-head">
     <div>
       <h1>${isEdit ? 'Editar Expediente Clínico' : 'Crear Expediente de Paciente'} ${isEdit ? badge(patient.fullName, 'gray') : ''}</h1>
-      <p class="subtitle">
-        ${isEdit
-          ? `Datos del paciente #${patient.id.slice(-6).toUpperCase()} · Registrado el ${formatDate(patient.createdAt)}`
-          : 'Por favor completa los siguientes datos para ingresar el paciente al sistema clínico'}
-      </p>
+      <p class="subtitle">${isEdit ? `Datos del paciente #${patient.id.slice(-6).toUpperCase()} · Registrado el ${formatDate(patient.createdAt)}` : 'Por favor completa los siguientes datos para ingresar el paciente al sistema clínico'}</p>
     </div>
   </div>
 
   <div id="formAlert"></div>
 
   <form class="form-card" id="patientForm">
-
     <div class="form-section-title">1. Datos Obligatorios</div>
-
     <div class="form-grid">
-
-      <div class="field">
-        <label>Tratamiento / Interés *</label>
-
-        <select
-          name="treatment"
-          id="treatmentSelect"
-          multiple
-          required>
-
-          ${settings.treatments.filter(t => t.active !== false).map(treatment => `
-            <option
-              value="${escapeHtml(treatment.id)}"
-              ${selectedTreatments.includes(treatment.id) ? 'selected' : ''}>${escapeHtml(treatment.name)}
-            </option>
-          `).join('')}
-
-        </select>
-
-        <small class="field-help">
-          Mantén presionada Ctrl (Windows) o Cmd (Mac) para seleccionar varias opciones.
-        </small>
-
-      </div>
-
+      <div class="field"><label>Nombre Completo *</label><input type="text" name="fullName" placeholder="Ej: Carlos Andrés Mendoza" required value="${escapeHtml(patient?.fullName || '')}"></div>
       <div class="field">
         <label>Teléfono Móvil *</label>
-
         <div class="phone-input-group">
-          <!-- Indicativo telefónico cargado dinámicamente -->
-          <select name="phoneCountryCode" class="phone-country-code" required>
-            ${countriesList.map(item => `
-              <option
-                value="${item.code}"
-                ${item.code === selectedCountryCode ? 'selected' : ''}>
-                ${item.name} (${item.code})
-              </option>
-            `).join('')}
-          </select>
-
-          <input
-            type="tel"
-            name="phone"
-            class="phone-number"
-            placeholder="300 123 4567"
-            required
-            value="${escapeHtml(patient?.phone || '')}">
+          <select name="phoneCode" class="phone-code-select">${countryCodeOptions(patient?.phoneCode || '+57')}</select>
+          <input type="tel" name="phone" placeholder="300 123 4567" required value="${escapeHtml(patient?.phone || '')}">
         </div>
       </div>
-
-      <div class="field">
-        <label>Correo Electrónico *</label>
-        <input
-          type="email"
-          name="email"
-          placeholder="ejemplo@correo.com"
-          required
-          value="${escapeHtml(patient?.email || '')}">
-      </div>
-
-      <div class="field">
-        <label>Estado ${isEdit ? '' : 'Inicial'} *</label>
-        <select name="status" required>
-          ${optionsFor(settings.statuses, patient?.status || 'nuevo')}
-        </select>
-      </div>
-
-      <div class="field">
-        <label>Origen de Paciente *</label>
-        <select name="origin" required>
-          <option value="">Selecciona...</option>
-          ${optionsFor(settings.origins, patient?.origin)}
-        </select>
-      </div>
-
-      <div class="field">
-        <label>País de origen *</label>
-        <select name="countryOfOrigin" required>
-          <option value="">Selecciona...</option>
-          <!-- País de origen cargado dinámicamente -->
-          ${countriesList.map(item => `
-            <option
-              value="${escapeHtml(item.name)}"
-              ${item.name === (patient?.countryOfOrigin || '') ? 'selected' : ''}>${escapeHtml(item.name)}
-            </option>
-          `).join('')}
-        </select>
-      </div>
-
-      <div class="field">
-        <label>Tratamiento / Interés *</label>
-
-        <select
-          name="treatment"
-          id="treatmentSelect"
-          multiple
-          required>
-
-          ${settings.treatments.map(treatment => `
-            <option
-              value="${escapeHtml(treatment)}"
-              ${selectedTreatments.includes(treatment) ? 'selected' : ''}>${escapeHtml(treatment)}
-            </option>
-          `).join('')}
-
-        </select>
-
-        <small class="field-help">
-          Mantén presionada Ctrl (Windows) o Cmd (Mac) para seleccionar varias opciones.
-        </small>
-
-      </div>
-
-      <div class="field">
-        <label>Responsable *</label>
-        <select name="responsible" required>
-          <option value="">Selecciona...</option>
-          ${optionsFor(settings.staff, patient?.responsible)}
-        </select>
-      </div>
-
-    </div>
-
-    <div class="form-section-title">
-      2. Datos Opcionales${isEdit ? ' &amp; Notas de Gestión' : ''}
-    </div>
-
-    <div class="form-grid">
-
-      <div class="field">
-        <label>Cédula / Documento de Identidad</label>
-        <input
-          type="text"
-          name="cedula"
-          placeholder="Número de documento"
-          value="${escapeHtml(patient?.cedula || '')}">
-      </div>
-
-      <div class="field">
-        <label>Dirección completa</label>
-        <input
-          type="text"
-          name="address"
-          placeholder="Ej: Cra 7 #72-10"
-          value="${escapeHtml(patient?.address || '')}">
-      </div>
-
+      <div class="field"><label>Correo Electrónico *</label><input type="email" name="email" placeholder="ejemplo@correo.com" required value="${escapeHtml(patient?.email || '')}"></div>
+      <div class="field"><label>Estado ${isEdit ? '' : 'Inicial'} *</label><select name="status" required>${optionsFor(settings.statuses, patient?.status || 'nuevo')}</select></div>
+      <div class="field"><label>Origen de Paciente *</label><select name="origin" required><option value="">Selecciona...</option>${optionsFor(settings.origins, patient?.origin)}</select></div>
       <div class="field full">
-        <label>Notas del Paciente / Alergias o Comentarios</label>
-        <textarea
-          name="notes"
-          placeholder="Agrega notas clínicas preliminares relevantes aquí...">${escapeHtml(patient?.notes || '')}</textarea>
+        <label>Tratamientos / Intereses * <span class="text-faint" style="font-weight:400;">(Ctrl/Cmd + clic para elegir varios)</span></label>
+        <select name="treatment" multiple required size="5" class="multi-select">${multiOptionsFor(settings.treatments, (patient?.treatment || '').split(',').filter(Boolean))}</select>
       </div>
-
+      <div class="field"><label>País de Origen</label><select name="countryOfOrigin">${countryNameOptions(patient?.countryOfOrigin || 'Colombia')}</select></div>
+      <div class="field"><label>Responsable *</label><select name="responsible" required><option value="">Selecciona...</option>${optionsFor(settings.staff, patient?.responsible)}</select></div>
     </div>
 
-    ${!isEdit ? `
-      <div class="checkbox-row mt-4">
-        <input type="checkbox" id="addTaskNow" name="addTaskNow">
-        <label for="addTaskNow">
-          Agregar tarea de seguimiento inmediatamente para este paciente
-        </label>
-      </div>
-    ` : ''}
+    <div class="form-section-title">2. Datos Opcionales${isEdit ? ' &amp; Notas de Gestión' : ''}</div>
+    <div class="form-grid">
+      <div class="field"><label>Cédula de Ciudadanía (C.C.)</label><input type="text" name="cedula" placeholder="Número de documento" value="${escapeHtml(patient?.cedula || '')}"></div>
+      <div class="field"><label>Dirección completa</label><input type="text" name="address" placeholder="Ej: Cra 7 #72-10" value="${escapeHtml(patient?.address || '')}"></div>
+      <div class="field full"><label>Notas del Paciente / Alergias o Comentarios</label><textarea name="notes" placeholder="Agrega notas clínicas preliminares relevantes aquí...">${escapeHtml(patient?.notes || '')}</textarea></div>
+    </div>
+
+    ${!isEdit ? `<div class="checkbox-row mt-4"><input type="checkbox" id="addTaskNow" name="addTaskNow"><label for="addTaskNow">Agregar tarea de seguimiento inmediatamente para este paciente</label></div>` : ''}
 
     <div class="form-actions">
-      <a
-        href="${isEdit ? '#/pacientes/' + patient.id : '#/pacientes'}"
-        class="btn btn-secondary">
-        Cancelar
-      </a>
-
-      <button type="submit" class="btn btn-primary">
-        ${isEdit ? 'Guardar cambios' : 'Guardar paciente'}
-      </button>
+      <a href="${isEdit ? '#/pacientes/' + patient.id : '#/pacientes'}" class="btn btn-secondary">Cancelar</a>
+      <button type="submit" class="btn btn-primary">${isEdit ? 'Guardar cambios' : 'Guardar paciente'}</button>
     </div>
-
   </form>
   `;
 }
+
 /* ============================== FOLLOW-UPS LIST ============================== */
 let followUpTab = 'hoy';
 function renderFollowUpList() {
@@ -1544,8 +1414,12 @@ function renderReports() {
 
   const byOrigin = settings.origins.filter(o => o.active).map(o => ({ name: o.name, value: patients.filter(p => p.origin === o.id).length }))
     .sort((a, b) => b.value - a.value).slice(0, 5);
-  const byTreatment = settings.treatments.filter(t => t.active).map(t => ({ name: t.name, value: patients.filter(p => p.treatment === t.id).length }))
+  const byTreatment = settings.treatments.filter(t => t.active).map(t => ({ name: t.name, value: patients.filter(p => (p.treatment || '').split(',').includes(t.id)).length }))
     .sort((a, b) => b.value - a.value).slice(0, 5);
+  const countryCounts = {};
+  patients.forEach(p => { const c = (p.countryOfOrigin || '').trim() || 'Sin especificar'; countryCounts[c] = (countryCounts[c] || 0) + 1; });
+  const byCountry = Object.entries(countryCounts).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 8);
+  const maxCountry = Math.max(1, ...byCountry.map(c => c.value));
   const maxOrigin = Math.max(1, ...byOrigin.map(o => o.value));
   const maxTreatment = Math.max(1, ...byTreatment.map(o => o.value));
   const activos = patients.filter(p => p.status === 'activo').length;
@@ -1590,6 +1464,10 @@ function renderReports() {
         `).join('') : emptyStateHtml('Sin motivos configurados', '')}
       </div>
     </div>
+    <div class="card" style="margin-top:20px;">
+        <h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">Pacientes por País de Origen</h3>
+        ${patients.length ? byCountry.map((c, i) => barItem(c.name, c.value, maxCountry, ['var(--color-primary)', 'var(--color-accent-green)', 'var(--color-accent-yellow)', 'var(--color-accent-purple)', 'var(--color-text-faint)'][i % 5])).join('') : emptyStateHtml('Sin datos suficientes', '')}
+      </div>
   </div>
   `;
 }
@@ -1710,6 +1588,7 @@ function attachViewHandlers(parts) {
       e.preventDefault();
       const fd = new FormData(e.target);
       const data = Object.fromEntries(fd.entries());
+      data.treatment = fd.getAll('treatment').join(',');
       const patient = createPatient(data);
       if (data.addTaskNow) {
         location.hash = `#/pacientes/${patient.id}`;
@@ -1726,6 +1605,7 @@ function attachViewHandlers(parts) {
       e.preventDefault();
       const fd = new FormData(e.target);
       const data = Object.fromEntries(fd.entries());
+      data.treatment = fd.getAll('treatment').join(',');
       updatePatient(parts[1], data);
       document.getElementById('formAlert').innerHTML = `<div class="alert-success">✓ Cambios listos para guardar. Se ha verificado la información del expediente clínico.</div>`;
       showToast('Cambios guardados correctamente');
