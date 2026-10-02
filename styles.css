@@ -209,6 +209,16 @@ h1, h2, h3, p { margin: 0; }
 
 .content { padding: var(--space-6); max-width: 1280px; width: 100%; margin: 0 auto; }
 
+.modal-overlay .modal.dentogram-modal {
+  width: min(1180px, 96vw) !important;
+  max-width: none !important;
+  height: min(880px, 92vh) !important;
+  max-height: none !important;
+  padding: 0;
+  position: relative;
+  background: #0A181B;
+  overflow: hidden;
+}
 /* ============ PAGE HEADER ============ */
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-4); margin-bottom: var(--space-5); flex-wrap: wrap; }
 .page-head h1 { font-size: 22px; font-weight: 700; }
