@@ -1059,13 +1059,27 @@ function renderPatientForm(editId) {
     <div class="form-grid">
 
       <div class="field">
-        <label>Nombre Completo *</label>
-        <input
-          type="text"
-          name="fullName"
-          placeholder="Ej: Carlos Andrés Mendoza"
-          required
-          value="${escapeHtml(patient?.fullName || '')}">
+        <label>Tratamiento / Interés *</label>
+
+        <select
+          name="treatment"
+          id="treatmentSelect"
+          multiple
+          required>
+
+          ${settings.treatments.filter(t => t.active !== false).map(treatment => `
+            <option
+              value="${escapeHtml(treatment.id)}"
+              ${selectedTreatments.includes(treatment.id) ? 'selected' : ''}>${escapeHtml(treatment.name)}
+            </option>
+          `).join('')}
+
+        </select>
+
+        <small class="field-help">
+          Mantén presionada Ctrl (Windows) o Cmd (Mac) para seleccionar varias opciones.
+        </small>
+
       </div>
 
       <div class="field">
