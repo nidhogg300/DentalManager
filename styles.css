@@ -434,3 +434,25 @@ table.data-table { width: 100%; border-collapse: collapse; min-width: 640px; }
   .profile-actions { width: 100%; }
   .profile-actions .btn { flex: 1; justify-content: center; }
 }
+.phone-input-group {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.phone-country-code {
+  width: 75px;
+  min-width: 75px;
+  padding: 8px 6px;
+}
+
+.phone-number {
+  flex: 1;
+}
+
+.field-help {
+  display: block;
+  margin-top: 5px;
+  font-size: 12px;
+  color: #6b7280;
+}

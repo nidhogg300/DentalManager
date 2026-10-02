@@ -5,7 +5,48 @@
    so a future API/Supabase/Postgres backend can replace localStorage
    without touching the UI code.
    ========================================================================= */
+let globalCountries = [];
 
+// Función para obtener países desde REST Countries
+async function loadCountriesData() {
+  try {
+    const response = await fetch('https://restcountries.com/v3.1/all?fields=name,idd,translations');
+    const data = await response.json();
+
+    globalCountries = data
+      .map(c => {
+        // Formatear indicativo telefónico (ej: +57)
+        const root = c.idd?.root || '';
+        const suffix = c.idd?.suffixes?.[0] || '';
+        const phoneCode = root ? `${root}${suffix}` : '';
+
+        // Nombre en español o fallback al nombre común en inglés
+        const nameSpa = c.translations?.spa?.common || c.name?.common || '';
+
+        return {
+          name: nameSpa,
+          code: phoneCode
+        };
+      })
+      // Filtrar países que no tengan nombre o indicativo válido
+      .filter(c => c.name && c.code)
+      // Ordenar alfabéticamente por nombre
+      .sort((a, b) => a.name.localeCompare(b.name, 'es'));
+
+  } catch (error) {
+    console.error('Error cargando países desde la API, usando lista por defecto:', error);
+    // Fallback básico si falla la red o no hay internet
+    globalCountries = [
+      { name: 'Colombia', code: '+57' },
+      { name: 'Estados Unidos', code: '+1' },
+      { name: 'España', code: '+34' },
+      { name: 'México', code: '+52' }
+    ];
+  }
+}
+
+// Ejecutar la carga al inicializar la aplicación
+loadCountriesData();
 /* ============================ STORAGE KEYS ============================
    Ya no se usa localStorage: estas claves solo quedan como referencia
    histórica y para el caché en memoria de abajo (CACHE). */
@@ -38,16 +79,18 @@ const DEFAULT_SETTINGS = {
     { id: 't5', name: 'Implantes', desc: 'Implantología dental', active: true, price: 0 },
     { id: 't6', name: 'Estética', desc: 'Diseño de sonrisa y carillas', active: true, price: 0 },
     { id: 't7', name: 'Periodoncia', desc: 'Tratamiento de encías', active: true, price: 0 },
-    { id: 't8', name: 'Otro', desc: 'Tratamiento no listado', active: true, price: 0 },
+    {id:"t8",name:"endodoncia",desc:"Tratamiento de conductos",active:true,price:0},
+    {id:"t9",name:"rehabilitación",desc:"devolver la función, la salud y la estética a la boca",active:true,price:0},
+    {id:"t10",name:"Otro",desc:"Tratamiento no listado",active:true,price:0}
   ],
   // Costos fijos mensuales (arriendo, nómina, servicios...). "fixed: true" significa que
   // se repite automáticamente cada mes en el reporte de Finanzas sin necesidad de
   // volver a registrarlo manualmente; "fixed: false" sirve para costos variables que sí
   // se ingresan mes a mes desde la pestaña Finanzas.
   fixedCosts: [
-    { id: 'c1', name: 'Arriendo del consultorio', desc: '', amount: 0, fixed: true, active: true },
-    { id: 'c2', name: 'Nómina / Personal', desc: '', amount: 0, fixed: true, active: true },
-    { id: 'c3', name: 'Servicios públicos', desc: '', amount: 0, fixed: true, active: true },
+    { id: 'c1', name: 'Nómina / Personal', desc: '', amount: 0, fixed: true, active: true },
+    { id: 'c2', name: 'Servicios públicos', desc: '', amount: 0, fixed: true, active: true },
+    { id: 'c3', name: 'Internet / Suscripciones', desc: '', amount: 0, fixed: true, active: true },
     { id: 'c4', name: 'Insumos y materiales', desc: 'Costo variable, se registra cada mes', amount: 0, fixed: false, active: true },
   ],
   // Correos autorizados para ver/editar la información contable (pestaña Finanzas).
@@ -975,47 +1018,211 @@ function renderPatientForm(editId) {
   const isEdit = !!editId;
   const patient = isEdit ? getPatientById(editId) : null;
   if (isEdit && !patient) return emptyStateHtml('Paciente no encontrado', '');
+
   const settings = getSettings();
+
+  const selectedTreatments = (patient?.treatment || '')
+    .split(',')
+    .map(t => t.trim())
+    .filter(Boolean);
+
+  // Si aún no han cargado los países de la API, usamos un array básico de contingencia
+  const countriesList = globalCountries.length > 0 
+    ? globalCountries 
+    : [
+        { name: 'Colombia', code: '+57' },
+        { name: 'Estados Unidos', code: '+1' },
+        { name: 'España', code: '+34' },
+        { name: 'México', code: '+52' }
+      ];
+
+  const selectedCountryCode = patient?.phoneCountryCode || '+57';
 
   return `
   <div class="page-head">
     <div>
       <h1>${isEdit ? 'Editar Expediente Clínico' : 'Crear Expediente de Paciente'} ${isEdit ? badge(patient.fullName, 'gray') : ''}</h1>
-      <p class="subtitle">${isEdit ? `Datos del paciente #${patient.id.slice(-6).toUpperCase()} · Registrado el ${formatDate(patient.createdAt)}` : 'Por favor completa los siguientes datos para ingresar el paciente al sistema clínico'}</p>
+      <p class="subtitle">
+        ${isEdit
+          ? `Datos del paciente #${patient.id.slice(-6).toUpperCase()} · Registrado el ${formatDate(patient.createdAt)}`
+          : 'Por favor completa los siguientes datos para ingresar el paciente al sistema clínico'}
+      </p>
     </div>
   </div>
 
   <div id="formAlert"></div>
 
   <form class="form-card" id="patientForm">
+
     <div class="form-section-title">1. Datos Obligatorios</div>
+
     <div class="form-grid">
-      <div class="field"><label>Nombre Completo *</label><input type="text" name="fullName" placeholder="Ej: Carlos Andrés Mendoza" required value="${escapeHtml(patient?.fullName || '')}"></div>
-      <div class="field"><label>Teléfono Móvil *</label><input type="tel" name="phone" placeholder="Ej: +57 300 123 4567" required value="${escapeHtml(patient?.phone || '')}"></div>
-      <div class="field"><label>Correo Electrónico *</label><input type="email" name="email" placeholder="ejemplo@correo.com" required value="${escapeHtml(patient?.email || '')}"></div>
-      <div class="field"><label>Estado ${isEdit ? '' : 'Inicial'} *</label><select name="status" required>${optionsFor(settings.statuses, patient?.status || 'nuevo')}</select></div>
-      <div class="field"><label>Origen de Paciente *</label><select name="origin" required><option value="">Selecciona...</option>${optionsFor(settings.origins, patient?.origin)}</select></div>
-      <div class="field"><label>Tratamiento / Interés *</label><select name="treatment" required><option value="">Selecciona...</option>${optionsFor(settings.treatments, patient?.treatment)}</select></div>
-      <div class="field"><label>Responsable *</label><select name="responsible" required><option value="">Selecciona...</option>${optionsFor(settings.staff, patient?.responsible)}</select></div>
+
+      <div class="field">
+        <label>Nombre Completo *</label>
+        <input
+          type="text"
+          name="fullName"
+          placeholder="Ej: Carlos Andrés Mendoza"
+          required
+          value="${escapeHtml(patient?.fullName || '')}">
+      </div>
+
+      <div class="field">
+        <label>Teléfono Móvil *</label>
+
+        <div class="phone-input-group">
+          <!-- Indicativo telefónico cargado dinámicamente -->
+          <select name="phoneCountryCode" class="phone-country-code" required>
+            ${countriesList.map(item => `
+              <option
+                value="${item.code}"
+                ${item.code === selectedCountryCode ? 'selected' : ''}>
+                ${item.name} (${item.code})
+              </option>
+            `).join('')}
+          </select>
+
+          <input
+            type="tel"
+            name="phone"
+            class="phone-number"
+            placeholder="300 123 4567"
+            required
+            value="${escapeHtml(patient?.phone || '')}">
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Correo Electrónico *</label>
+        <input
+          type="email"
+          name="email"
+          placeholder="ejemplo@correo.com"
+          required
+          value="${escapeHtml(patient?.email || '')}">
+      </div>
+
+      <div class="field">
+        <label>Estado ${isEdit ? '' : 'Inicial'} *</label>
+        <select name="status" required>
+          ${optionsFor(settings.statuses, patient?.status || 'nuevo')}
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Origen de Paciente *</label>
+        <select name="origin" required>
+          <option value="">Selecciona...</option>
+          ${optionsFor(settings.origins, patient?.origin)}
+        </select>
+      </div>
+
+      <div class="field">
+        <label>País de origen *</label>
+        <select name="countryOfOrigin" required>
+          <option value="">Selecciona...</option>
+          <!-- País de origen cargado dinámicamente -->
+          ${countriesList.map(item => `
+            <option
+              value="${escapeHtml(item.name)}"
+              ${item.name === (patient?.countryOfOrigin || '') ? 'selected' : ''}>${escapeHtml(item.name)}
+            </option>
+          `).join('')}
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Tratamiento / Interés *</label>
+
+        <select
+          name="treatment"
+          id="treatmentSelect"
+          multiple
+          required>
+
+          ${settings.treatments.map(treatment => `
+            <option
+              value="${escapeHtml(treatment)}"
+              ${selectedTreatments.includes(treatment) ? 'selected' : ''}>${escapeHtml(treatment)}
+            </option>
+          `).join('')}
+
+        </select>
+
+        <small class="field-help">
+          Mantén presionada Ctrl (Windows) o Cmd (Mac) para seleccionar varias opciones.
+        </small>
+
+      </div>
+
+      <div class="field">
+        <label>Responsable *</label>
+        <select name="responsible" required>
+          <option value="">Selecciona...</option>
+          ${optionsFor(settings.staff, patient?.responsible)}
+        </select>
+      </div>
+
     </div>
 
-    <div class="form-section-title">2. Datos Opcionales${isEdit ? ' &amp; Notas de Gestión' : ''}</div>
-    <div class="form-grid">
-      <div class="field"><label>Cédula de Ciudadanía (C.C.)</label><input type="text" name="cedula" placeholder="Número de documento" value="${escapeHtml(patient?.cedula || '')}"></div>
-      <div class="field"><label>Dirección completa</label><input type="text" name="address" placeholder="Ej: Cra 7 #72-10" value="${escapeHtml(patient?.address || '')}"></div>
-      <div class="field full"><label>Notas del Paciente / Alergias o Comentarios</label><textarea name="notes" placeholder="Agrega notas clínicas preliminares relevantes aquí...">${escapeHtml(patient?.notes || '')}</textarea></div>
+    <div class="form-section-title">
+      2. Datos Opcionales${isEdit ? ' &amp; Notas de Gestión' : ''}
     </div>
 
-    ${!isEdit ? `<div class="checkbox-row mt-4"><input type="checkbox" id="addTaskNow" name="addTaskNow"><label for="addTaskNow">Agregar tarea de seguimiento inmediatamente para este paciente</label></div>` : ''}
+    <div class="form-grid">
+
+      <div class="field">
+        <label>Cédula / Documento de Identidad</label>
+        <input
+          type="text"
+          name="cedula"
+          placeholder="Número de documento"
+          value="${escapeHtml(patient?.cedula || '')}">
+      </div>
+
+      <div class="field">
+        <label>Dirección completa</label>
+        <input
+          type="text"
+          name="address"
+          placeholder="Ej: Cra 7 #72-10"
+          value="${escapeHtml(patient?.address || '')}">
+      </div>
+
+      <div class="field full">
+        <label>Notas del Paciente / Alergias o Comentarios</label>
+        <textarea
+          name="notes"
+          placeholder="Agrega notas clínicas preliminares relevantes aquí...">${escapeHtml(patient?.notes || '')}</textarea>
+      </div>
+
+    </div>
+
+    ${!isEdit ? `
+      <div class="checkbox-row mt-4">
+        <input type="checkbox" id="addTaskNow" name="addTaskNow">
+        <label for="addTaskNow">
+          Agregar tarea de seguimiento inmediatamente para este paciente
+        </label>
+      </div>
+    ` : ''}
 
     <div class="form-actions">
-      <a href="${isEdit ? '#/pacientes/' + patient.id : '#/pacientes'}" class="btn btn-secondary">Cancelar</a>
-      <button type="submit" class="btn btn-primary">${isEdit ? 'Guardar cambios' : 'Guardar paciente'}</button>
+      <a
+        href="${isEdit ? '#/pacientes/' + patient.id : '#/pacientes'}"
+        class="btn btn-secondary">
+        Cancelar
+      </a>
+
+      <button type="submit" class="btn btn-primary">
+        ${isEdit ? 'Guardar cambios' : 'Guardar paciente'}
+      </button>
     </div>
+
   </form>
   `;
 }
-
 /* ============================== FOLLOW-UPS LIST ============================== */
 let followUpTab = 'hoy';
 function renderFollowUpList() {
