@@ -265,11 +265,14 @@ textarea{resize:vertical}
   </main>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="supabase-config.js"></script>   <!-- el MISMO archivo que usa index.html -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="supabase-config.js"></script>
 <script>
-  // Garantiza que el dentograma lo encuentre como window.supabaseClient
-  window.supabaseClient = window.supabaseClient || supabaseClient;
+  // Si supabase-config.js declara "const supabaseClient", no cuelga de window:
+  // este puente lo expone para que dentograma-app.js lo encuentre.
+  if (typeof supabaseClient !== 'undefined') {
+    window.supabaseClient = supabaseClient;
+  }
 </script>
 <script src="dentograma-app.js"></script>
 </body>
