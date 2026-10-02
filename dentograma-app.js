@@ -2678,6 +2678,49 @@ function bindUI() {
 
   let saveArmed = null;
   const btnSave = $('#btnSave');
+
+  if (btnSave) {
+  console.log('Botón #btnSave encontrado en el DOM.'); // Verificar si encuentra el botón
+  
+  btnSave.addEventListener('click', async event => {
+    console.log('Clic detectado en el botón guardar.'); // Verificar si escucha el clic
+
+    const button = event.currentTarget;
+
+    if (!saveArmed) {
+      console.log('Primer clic: Armando confirmación...');
+      button.textContent = '¿Seguro? Toca otra vez';
+      button.classList.add('warn');
+      saveArmed = setTimeout(() => {
+        saveArmed = null;
+        button.textContent = 'Guardar cambios';
+        button.classList.remove('warn');
+      }, 3000);
+      return;
+    }
+
+    console.log('Segundo clic: Ejecutando persistToSupabase()...');
+    clearTimeout(saveArmed);
+    saveArmed = null;
+    button.classList.remove('warn');
+    button.textContent = 'Guardando...';
+    button.disabled = true;
+
+    // Llamada real al guardado
+    const result = await persistToSupabase();
+
+    button.disabled = false;
+    button.textContent = 'Guardar cambios';
+    
+    if (saveStatus) {
+      saveStatus.textContent = result.ok ? 'Cambios guardados ✓' : 'No se pudo guardar. Intenta de nuevo.';
+      setTimeout(() => { if (saveStatus) saveStatus.textContent = ''; }, 3000);
+    }
+  });
+} else {
+  console.error('No se encontró el elemento #btnSave en el HTML.');
+}
+
   const saveStatus = $('#saveStatus');
 
   if (btnSave) btnSave.addEventListener('click', async event => {
