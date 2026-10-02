@@ -176,7 +176,6 @@ textarea{resize:vertical}
 <div class="wrap">
   <header class="top">
     <div>
-      <p class="brand">Consultorio Dra. [Nombre]</p>
       <h1>Así están tus dientes</h1>
       <p class="lede">Gira el modelo y toca un diente para ver qué encontró la doctora en tu primera valoración.</p>
     </div>
@@ -266,8 +265,12 @@ textarea{resize:vertical}
   </main>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
-<script src="supabase-config.js"></script>
-<script type="module" src="dentograma-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-client.js"></script>   <!-- el MISMO archivo que usa index.html -->
+<script>
+  // Garantiza que el dentograma lo encuentre como window.supabaseClient
+  window.supabaseClient = window.supabaseClient || supabaseClient;
+</script>
+<script src="dentograma-app.js"></script>
 </body>
 </html>

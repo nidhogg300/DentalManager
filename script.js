@@ -88,10 +88,8 @@ const DEFAULT_SETTINGS = {
     { id: 'r5', name: 'Otro', desc: '', active: true },
   ],
   staff: [
-    { id: 's1', name: 'Dra. Carolina Gómez', desc: 'Administradora', active: true },
-    { id: 's2', name: 'Dr. Sergio Plaza', desc: 'Odontólogo', active: true },
-    { id: 's3', name: 'Dra. Ana Martínez', desc: 'Odontóloga', active: true },
-    { id: 's4', name: 'Aux. Sandra Patiño', desc: 'Auxiliar clínica', active: true },
+    { id: 's1', name: 'Dra. Martha Contreras', desc: 'Gerente', active: true },
+    { id: 's2', name: 'Dra. Alejandra', desc: 'Odontóloga', active: true }
   ],
 };
 
