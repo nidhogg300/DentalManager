@@ -151,6 +151,10 @@ function countryNameOptions(selected) {
     `<option value="${escapeHtml(name)}" ${name === selected ? 'selected' : ''}>${escapeHtml(name)}</option>`
   ).join('');
 }
+function phoneCodeDisplay(code) {
+  const match = COUNTRIES.find(([, c]) => c === code);
+  return match ? `${match[0]} (${match[1]})` : (code || '');
+}
 
 /* ============================== DATA LAYER ==============================
    Respaldado por Supabase (Postgres). Para no reescribir todas las
@@ -1072,24 +1076,41 @@ function renderPatientForm(editId) {
     <div class="form-section-title">1. Datos Obligatorios</div>
     <div class="form-grid">
       <div class="field"><label>Nombre Completo *</label><input type="text" name="fullName" placeholder="Ej: Carlos Andrés Mendoza" required value="${escapeHtml(patient?.fullName || '')}"></div>
-      <div class="field">
+            <div class="field">
         <label>Teléfono Móvil *</label>
         <div class="phone-input-group">
-          <select name="phoneCode" class="phone-code-select">${countryCodeOptions(patient?.phoneCode || '+57')}</select>
+          <input type="text" name="phoneCodeText" list="countryCodeList" class="phone-code-input"
+            placeholder="País" autocomplete="off"
+            value="${escapeHtml(phoneCodeDisplay(patient?.phoneCode || '+57'))}">
           <input type="tel" name="phone" placeholder="300 123 4567" required value="${escapeHtml(patient?.phone || '')}">
         </div>
+        <datalist id="countryCodeList">
+          ${COUNTRIES.map(([name, code]) => `<option value="${escapeHtml(name)} (${code})">`).join('')}
+        </datalist>
       </div>
       <div class="field"><label>Correo Electrónico *</label><input type="email" name="email" placeholder="ejemplo@correo.com" required value="${escapeHtml(patient?.email || '')}"></div>
       <div class="field"><label>Estado ${isEdit ? '' : 'Inicial'} *</label><select name="status" required>${optionsFor(settings.statuses, patient?.status || 'nuevo')}</select></div>
       <div class="field"><label>Origen de Paciente *</label><select name="origin" required><option value="">Selecciona...</option>${optionsFor(settings.origins, patient?.origin)}</select></div>
-      <div class="field full">
-        <label>Tratamientos / Intereses * <span class="text-faint" style="font-weight:400;">(Ctrl/Cmd + clic para elegir varios)</span></label>
-        <select name="treatment" multiple required size="5" class="multi-select">${multiOptionsFor(settings.treatments, (patient?.treatment || '').split(',').filter(Boolean))}</select>
+      <div class="field">
+        <label>País de Origen</label>
+        <input type="text" name="countryOfOrigin" list="countryNameList" placeholder="Escribe para buscar..." autocomplete="off" value="${escapeHtml(patient?.countryOfOrigin || 'Colombia')}">
+        <datalist id="countryNameList">${COUNTRIES.map(([name]) => `<option value="${escapeHtml(name)}">`).join('')}</datalist>
       </div>
-      <div class="field"><label>País de Origen</label><select name="countryOfOrigin">${countryNameOptions(patient?.countryOfOrigin || 'Colombia')}</select></div>
       <div class="field"><label>Responsable *</label><select name="responsible" required><option value="">Selecciona...</option>${optionsFor(settings.staff, patient?.responsible)}</select></div>
+      <div class="field full">
+        <label>Tratamientos / Intereses *</label>
+        <div class="chip-select-group" id="treatmentChips">
+          ${settings.treatments.filter(t => t.active !== false).map(t => {
+            const checked = (patient?.treatment || '').split(',').filter(Boolean).includes(t.id);
+            return `<label class="chip-toggle ${checked ? 'active' : ''}">
+              <input type="checkbox" name="treatment" value="${t.id}" ${checked ? 'checked' : ''}>
+              <span>${escapeHtml(t.name)}</span>
+            </label>`;
+          }).join('')}
+        </div>
+        <span class="field-hint">Toca uno o varios. Puedes combinarlos.</span>
+      </div>
     </div>
-
     <div class="form-section-title">2. Datos Opcionales${isEdit ? ' &amp; Notas de Gestión' : ''}</div>
     <div class="form-grid">
       <div class="field"><label>Cédula de Ciudadanía (C.C.)</label><input type="text" name="cedula" placeholder="Número de documento" value="${escapeHtml(patient?.cedula || '')}"></div>
@@ -1587,8 +1608,13 @@ function attachViewHandlers(parts) {
     document.getElementById('patientForm').addEventListener('submit', (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      const treatments = fd.getAll('treatment');
+      if (!treatments.length) { showToast('Selecciona al menos un tratamiento de interés'); return; }
       const data = Object.fromEntries(fd.entries());
-      data.treatment = fd.getAll('treatment').join(',');
+      data.treatment = treatments.join(',');
+      const codeMatch = (data.phoneCodeText || '').match(/\(([^)]+)\)\s*$/);
+      data.phoneCode = codeMatch ? codeMatch[1] : '+57';
+      delete data.phoneCodeText;
       const patient = createPatient(data);
       if (data.addTaskNow) {
         location.hash = `#/pacientes/${patient.id}`;
@@ -1604,9 +1630,17 @@ function attachViewHandlers(parts) {
     document.getElementById('patientForm').addEventListener('submit', (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      const treatments = fd.getAll('treatment');
+      if (!treatments.length) { showToast('Selecciona al menos un tratamiento de interés'); return; }
       const data = Object.fromEntries(fd.entries());
-      data.treatment = fd.getAll('treatment').join(',');
+      data.treatment = treatments.join(',');
+      const codeMatch = (data.phoneCodeText || '').match(/\(([^)]+)\)\s*$/);
+      data.phoneCode = codeMatch ? codeMatch[1] : '+57';
+      delete data.phoneCodeText;
       updatePatient(parts[1], data);
+      document.querySelectorAll('#treatmentChips .chip-toggle input').forEach(cb => {
+      cb.addEventListener('change', () => cb.closest('.chip-toggle').classList.toggle('active', cb.checked));
+      });
       document.getElementById('formAlert').innerHTML = `<div class="alert-success">✓ Cambios listos para guardar. Se ha verificado la información del expediente clínico.</div>`;
       showToast('Cambios guardados correctamente');
       setTimeout(() => { location.hash = `#/pacientes/${parts[1]}`; }, 700);
@@ -1619,6 +1653,9 @@ function attachViewHandlers(parts) {
     const cancelBtn = document.getElementById('cancelFollowUpModal');
     if (cancelBtn) cancelBtn.addEventListener('click', closeFollowUpModal);
     const form = document.getElementById('quickFollowUpForm');
+    document.querySelectorAll('#treatmentChips .chip-toggle input').forEach(cb => {
+      cb.addEventListener('change', () => cb.closest('.chip-toggle').classList.toggle('active', cb.checked));
+    });
     if (form) form.addEventListener('submit', (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
