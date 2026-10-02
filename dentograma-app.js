@@ -433,8 +433,6 @@ function save() {
   render();
 }
 
-// Busca el cliente de Supabase sin importar cómo lo declare supabase-config.js:
-// window.supabaseClient, "const supabaseClient" global, o el del documento padre.
 function getSupabase() {
   if (window.supabaseClient) return window.supabaseClient;
   try {
@@ -496,7 +494,7 @@ async function persistToSupabase() {
     console.error('Error al guardar: no se encontró el cliente de Supabase (revisa que dentograma.html cargue supabase-config.js).');
     return { ok: false, reason: 'missing_supabase_client' };
   }
-
+ 
   const payload = {
     name: data.name,
     date: data.date,
@@ -505,7 +503,7 @@ async function persistToSupabase() {
     x: data.x,
     t: data.t
   };
-
+ 
   try {
     // 2. Ejecutar actualización con .select() para confirmar respuesta
     const { data: updatedRows, error } = await sb
@@ -513,18 +511,18 @@ async function persistToSupabase() {
       .update({ dental_map: payload })
       .eq('id', PATIENT_ID)
       .select();
-
+ 
     if (error) {
       console.error('Error devuelto por Supabase:', error.message, error.details, error.hint);
       throw error;
     }
-
+ 
     // 3. Si no devolvió filas, las políticas RLS de Supabase bloquearon el UPDATE
     if (!updatedRows || updatedRows.length === 0) {
       console.warn('Atención: La consulta fue exitosa pero 0 filas fueron actualizadas. Revisa los permisos RLS en Supabase.');
       return { ok: false, reason: 'no_rows_updated' };
     }
-
+ 
     console.log('Dentograma actualizado correctamente:', updatedRows);
     return { ok: true };
   } catch (err) {
@@ -532,7 +530,6 @@ async function persistToSupabase() {
     return { ok: false, error: err };
   }
 }
-
 /* ============================================================
    DOM
    ============================================================ */
@@ -2699,51 +2696,80 @@ function bindUI() {
 
   let saveArmed = null;
   const btnSave = $('#btnSave');
-  const saveStatus = $('#saveStatus');
 
   if (btnSave) {
-    btnSave.addEventListener('click', async event => {
-      const button = event.currentTarget;
+  console.log('Botón #btnSave encontrado en el DOM.'); // Verificar si encuentra el botón
+  
+  btnSave.addEventListener('click', async event => {
+    console.log('Clic detectado en el botón guardar.'); // Verificar si escucha el clic
 
-      // Primer toque: pide confirmación.
-      if (!saveArmed) {
-        button.textContent = '¿Seguro? Toca otra vez';
-        button.classList.add('warn');
-        saveArmed = setTimeout(() => {
-          saveArmed = null;
-          button.textContent = 'Guardar cambios';
-          button.classList.remove('warn');
-        }, 3000);
-        return;
-      }
+    const button = event.currentTarget;
 
-      // Segundo toque: guarda.
-      clearTimeout(saveArmed);
-      saveArmed = null;
-      button.classList.remove('warn');
-      button.textContent = 'Guardando...';
-      button.disabled = true;
+    if (!saveArmed) {
+      console.log('Primer clic: Armando confirmación...');
+      button.textContent = '¿Seguro? Toca otra vez';
+      button.classList.add('warn');
+      saveArmed = setTimeout(() => {
+        saveArmed = null;
+        button.textContent = 'Guardar cambios';
+        button.classList.remove('warn');
+      }, 3000);
+      return;
+    }
 
-      const result = await persistToSupabase();
+    console.log('Segundo clic: Ejecutando persistToSupabase()...');
+    clearTimeout(saveArmed);
+    saveArmed = null;
+    button.classList.remove('warn');
+    button.textContent = 'Guardando...';
+    button.disabled = true;
 
-      button.disabled = false;
-      button.textContent = 'Guardar cambios';
+    // Llamada real al guardado
+    const result = await persistToSupabase();
 
-      if (saveStatus) {
-        const reasons = {
-          missing_patient_id: 'falta el ID del paciente en la URL.',
-          missing_supabase_client: 'no hay conexión con Supabase.',
-          no_rows_updated: 'Supabase no permitió la actualización (revisa RLS / permisos).'
-        };
-        saveStatus.textContent = result.ok
-          ? 'Cambios guardados ✓'
-          : 'No se pudo guardar: ' + (reasons[result.reason] || (result.error && result.error.message) || 'error desconocido');
-        setTimeout(() => { saveStatus.textContent = ''; }, 6000);
-      }
-    });
-  } else {
-    console.error('No se encontró el elemento #btnSave en el HTML.');
-  }
+    button.disabled = false;
+    button.textContent = 'Guardar cambios';
+    
+    if (saveStatus) {
+      saveStatus.textContent = result.ok ? 'Cambios guardados ✓' : 'No se pudo guardar. Intenta de nuevo.';
+      setTimeout(() => { if (saveStatus) saveStatus.textContent = ''; }, 3000);
+    }
+  });
+} else {
+  console.error('No se encontró el elemento #btnSave en el HTML.');
+}
+
+  const saveStatus = $('#saveStatus');
+
+  if (btnSave) btnSave.addEventListener('click', async event => {
+    const button = event.currentTarget;
+
+    if (!saveArmed) {
+      button.textContent = '¿Seguro? Toca otra vez';
+      button.classList.add('warn');
+      saveArmed = setTimeout(() => {
+        saveArmed = null;
+        button.textContent = 'Guardar cambios';
+        button.classList.remove('warn');
+      }, 3000);
+      return;
+    }
+
+    clearTimeout(saveArmed);
+    saveArmed = null;
+    button.classList.remove('warn');
+    button.textContent = 'Guardando...';
+    button.disabled = true;
+
+    const result = await persistToSupabase();
+
+    button.disabled = false;
+    button.textContent = 'Guardar cambios';
+    if (saveStatus) {
+      saveStatus.textContent = result.ok ? 'Cambios guardados ✓' : 'No se pudo guardar. Intenta de nuevo.';
+      setTimeout(() => { if (saveStatus) saveStatus.textContent = ''; }, 3000);
+    }
+  });
 
   // "Todos sanos": deja los 32 dientes en estado sano (conserva nombre,
   // fecha y observaciones generales). Pide confirmación con un segundo toque.
