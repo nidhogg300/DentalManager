@@ -181,6 +181,16 @@ h1, h2, h3, p { margin: 0; }
   width: min(1180px, 96vw); height: min(880px, 92vh); max-width: none; padding: 0;
   position: relative; background: #0A181B; overflow: hidden;
 }
+.modal.dentogram-modal {
+  width: min(1180px, 96vw);
+  max-width: none;
+  height: min(880px, 92vh);
+  max-height: none;
+  padding: 0;
+  position: relative;
+  background: #0A181B;
+  overflow: hidden;
+}
 .dentogram-frame { width: 100%; height: 100%; border: 0; display: block; }
 .dentogram-close {
   position: absolute; top: 10px; right: 10px; z-index: 5; width: 34px; height: 34px; border-radius: 50%;
