@@ -466,15 +466,49 @@ async function loadInitial() {
 }
 
 async function persistToSupabase() {
-  if (!PATIENT_ID || !window.supabaseClient) return { ok: false };
-  const payload = { name: data.name, date: data.date, general: data.general, s: data.s, x: data.x, t: data.t };
+  // 1. Verificación explícita de variables globales
+  if (!PATIENT_ID) {
+    console.error('Error al guardar: PATIENT_ID no está definido o es nulo.');
+    return { ok: false, reason: 'missing_patient_id' };
+  }
+  if (!window.supabaseClient) {
+    console.error('Error al guardar: window.supabaseClient no está disponible.');
+    return { ok: false, reason: 'missing_supabase_client' };
+  }
+
+  const payload = {
+    name: data.name,
+    date: data.date,
+    general: data.general,
+    s: data.s,
+    x: data.x,
+    t: data.t
+  };
+
   try {
-    const { error } = await window.supabaseClient.from('patients').update({ dental_map: payload }).eq('id', PATIENT_ID);
-    if (error) throw error;
+    // 2. Ejecutar actualización con .select() para confirmar respuesta
+    const { data: updatedRows, error } = await window.supabaseClient
+      .from('patients')
+      .update({ dental_map: payload })
+      .eq('id', PATIENT_ID)
+      .select();
+
+    if (error) {
+      console.error('Error devuelto por Supabase:', error.message, error.details, error.hint);
+      throw error;
+    }
+
+    // 3. Si no devolvió filas, las políticas RLS de Supabase bloquearon el UPDATE
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Atención: La consulta fue exitosa pero 0 filas fueron actualizadas. Revisa los permisos RLS en Supabase.');
+      return { ok: false, reason: 'no_rows_updated' };
+    }
+
+    console.log('Dentograma actualizado correctamente:', updatedRows);
     return { ok: true };
   } catch (err) {
-    console.error('No se pudo guardar el dentograma:', err);
-    return { ok: false };
+    console.error('Excepción atrapada al guardar el dentograma:', err);
+    return { ok: false, error: err };
   }
 }
 
