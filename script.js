@@ -1443,6 +1443,7 @@ function renderReports() {
   const maxCountry = Math.max(1, ...byCountry.map(c => c.value));
   const maxOrigin = Math.max(1, ...byOrigin.map(o => o.value));
   const maxTreatment = Math.max(1, ...byTreatment.map(o => o.value));
+  const nuevos = patients.filter(p => p.status === 'nuevo').length;
   const activos = patients.filter(p => p.status === 'activo').length;
   const inactivos = patients.filter(p => p.status === 'inactivo').length;
   const sinContacto = patients.filter(p => p.status === 'no_reactivar').length;
@@ -1455,7 +1456,7 @@ function renderReports() {
   <div class="grid-metrics">
     ${metricCard('Seguimientos Completados', completados, 'green')}
     ${metricCard('Seguimientos Pendientes', pendientes, 'blue')}
-    ${metricCard('Nuevos Pacientes', patients.length, 'yellow')}
+    ${metricCard('Nuevos Pacientes', nuevos, 'yellow')}
     ${metricCard('Sin Contacto (30+ días)', sinContacto, 'red')}
   </div>
 
