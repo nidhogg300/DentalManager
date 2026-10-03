@@ -470,3 +470,15 @@ table.data-table { width: 100%; border-collapse: collapse; min-width: 640px; }
 .chip-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
 .chip-toggle.active { background: var(--color-primary); border-color: var(--color-primary); color: #fff; font-weight: 600; }
 .field-hint { display: block; margin-top: 4px; font-size: 11.5px; color: var(--color-text-faint); }
+/* Barra de margen de utilidad (arriba del todo en Finanzas) */
+.utility-bar-wrap { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); box-shadow: var(--shadow-card); padding: var(--space-4) var(--space-5); margin-bottom: var(--space-5); }
+.utility-bar-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 13.5px; font-weight: 600; margin-bottom: 8px; }
+.utility-bar-head strong { font-size: 20px; font-weight: 700; }
+.utility-bar-track { height: 10px; border-radius: var(--radius-pill); background: #eef1f5; overflow: hidden; }
+.utility-bar-fill { height: 100%; border-radius: var(--radius-pill); transition: width .4s ease; }
+.utility-bar-sub { margin: 8px 0 0; font-size: 12.5px; color: var(--color-text-soft); }
+
+/* Nómina y comisiones */
+.payroll-row { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--color-border); flex-wrap: wrap; }
+.payroll-row:last-of-type { border-bottom: none; }
+.payroll-total { display: flex; justify-content: space-between; align-items: center; padding-top: var(--space-3); margin-top: var(--space-2); border-top: 2px solid var(--color-border); font-weight: 700; font-size: 14px; }

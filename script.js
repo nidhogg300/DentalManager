@@ -90,8 +90,8 @@ const DEFAULT_SETTINGS = {
     { id: 'r5', name: 'Otro', desc: '', active: true },
   ],
   staff: [
-    { id: 's1', name: 'Dra. Martha Contreras', desc: 'Gerente', active: true },
-    { id: 's2', name: 'Dra. Alejandra', desc: 'Odontóloga', active: true }
+    { id: 's1', name: 'Dra. Martha Contreras', desc: 'Gerente', active: true, payType: 'fijo', monthlySalary: 0, commissionPercent: 0 },
+    { id: 's2', name: 'Dra. Alejandra', desc: 'Odontóloga', active: true, payType: 'fijo', monthlySalary: 0, commissionPercent: 0 }
   ],
 };
 
@@ -482,11 +482,19 @@ function escapeHtml(str) {
   if (str === null || str === undefined) return '';
   return String(str).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 }
-function formatDate(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (isNaN(d)) return iso;
-  return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' });
+function formatDate(dateStr) {
+  if (!dateStr) return '—';
+  const s = String(dateStr);
+  let d;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    // Fecha pura (sin hora) — se arma con los componentes locales para
+    // evitar que el navegador la lea como medianoche UTC y la corra un día.
+    const [y, m, day] = s.split('-').map(Number);
+    d = new Date(y, m - 1, day);
+  } else {
+    d = new Date(s); // timestamp completo (created_at, completed_at...) esto sí está bien tal cual
+  }
+  return d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 function initials(name) {
   if (!name) return '—';
@@ -832,7 +840,13 @@ function donutChart(segments, total) {
 function emptyStateHtml(title, sub) {
   return `<div class="empty-state"><div class="empty-icon">—</div><p class="empty-title">${escapeHtml(title)}</p><p class="empty-sub">${escapeHtml(sub || '')}</p></div>`;
 }
-function todayISO() { return new Date().toISOString().slice(0, 10); }
+function todayISO() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 function taskTypeLabel(id) {
   const t = getSettings().taskTypes.find(x => x.id === id);
   return t ? t.name : (id || 'Tarea de seguimiento');
@@ -1387,15 +1401,57 @@ function renderFinance() {
   const fixedActive = settings.fixedCosts.filter(c => c.active !== false && c.fixed);
   const totalIngresos = ingresos.reduce((s, t) => s + t.amount, 0);
   const totalFijos = fixedActive.reduce((s, c) => s + (Number(c.amount) || 0), 0);
-  const totalGastos = gastosVariables.reduce((s, t) => s + t.amount, 0) + totalFijos;
+  const totalGastosManual = gastosVariables.reduce((s, t) => s + t.amount, 0);
+
+  const staffList = settings.staff.filter(s => s.active !== false);
+  const nominaFija = staffList.filter(s => s.payType === 'fijo')
+    .reduce((sum, s) => sum + (Number(s.monthlySalary) || 0), 0);
+  const comisiones = staffList.filter(s => s.payType === 'comision').map(s => {
+    const produccion = ingresos.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
+    const comision = produccion * ((Number(s.commissionPercent) || 0) / 100);
+    return { staffId: s.id, nombre: s.name, produccion, comision };
+  });
+  const totalComisiones = comisiones.reduce((sum, c) => sum + c.comision, 0);
+
+  const totalGastos = totalGastosManual + totalFijos + nominaFija + totalComisiones;
   const utilidad = totalIngresos - totalGastos;
+
+  // --- Barra de margen de utilidad ---
+  let marginPct = totalIngresos > 0 ? Math.round((utilidad / totalIngresos) * 100) : null;
+  let marginColor = 'var(--color-accent-red)';
+  let marginLabel = 'Sin ingresos registrados este mes todavía.';
+  if (marginPct !== null) {
+    if (marginPct >= 30) { marginColor = 'var(--color-accent-green)'; marginLabel = 'Buen margen este mes.'; }
+    else if (marginPct >= 10) { marginColor = 'var(--color-accent-yellow)'; marginLabel = 'Margen ajustado — vale la pena revisar los gastos.'; }
+    else { marginColor = 'var(--color-accent-red)'; marginLabel = marginPct >= 0 ? 'Margen muy bajo este mes.' : 'Este mes se está perdiendo dinero.'; }
+  }
+  const marginBarWidth = marginPct === null ? 0 : Math.max(0, Math.min(100, marginPct));
 
   const byDoctor = {};
   ingresos.forEach(t => { const k = t.responsible || ''; byDoctor[k] = (byDoctor[k] || 0) + t.amount; });
   const doctorRows = Object.entries(byDoctor).map(([id, val]) => ({ name: id ? staffLabel(id) : 'Sin asignar', value: val })).sort((a, b) => b.value - a.value);
   const maxDoctor = Math.max(1, ...doctorRows.map(d => d.value));
 
+  // --- Desglose "¿en qué se va la plata?" ---
+  const gastoCategorias = {};
+  gastosVariables.forEach(t => { const label = fixedCostLabel(t.category); gastoCategorias[label] = (gastoCategorias[label] || 0) + t.amount; });
+  fixedActive.forEach(c => { gastoCategorias[c.name] = (gastoCategorias[c.name] || 0) + (Number(c.amount) || 0); });
+  if (nominaFija) gastoCategorias['Nómina fija'] = (gastoCategorias['Nómina fija'] || 0) + nominaFija;
+  if (totalComisiones) gastoCategorias['Comisiones'] = (gastoCategorias['Comisiones'] || 0) + totalComisiones;
+  const gastoColors = ['var(--color-accent-red)', 'var(--color-primary)', 'var(--color-accent-yellow)', 'var(--color-accent-purple)', 'var(--color-text-faint)', 'var(--color-accent-green)'];
+  const gastoSegments = Object.entries(gastoCategorias).sort((a, b) => b[1] - a[1]).slice(0, 6)
+    .map(([label, value], i) => ({ label, value, color: gastoColors[i % gastoColors.length] }));
+
   return `
+  <div class="utility-bar-wrap" data-band="${marginPct === null ? 'none' : marginPct >= 30 ? 'good' : marginPct >= 10 ? 'mid' : 'low'}">
+    <div class="utility-bar-head">
+      <span>Margen de utilidad — ${monthLabel(month)}</span>
+      <strong style="color:${marginColor}">${marginPct === null ? '—' : marginPct + '%'}</strong>
+    </div>
+    <div class="utility-bar-track"><div class="utility-bar-fill" style="width:${marginBarWidth}%;background:${marginColor}"></div></div>
+    <p class="utility-bar-sub">${marginLabel}</p>
+  </div>
+
   <div class="page-head">
     <div>
       <h1>Finanzas del Consultorio</h1>
@@ -1410,6 +1466,7 @@ function renderFinance() {
   <div class="grid-metrics">
     ${metricCard('Ingresos del mes', formatCOP(totalIngresos), 'green')}
     ${metricCard('Gastos del mes', formatCOP(totalGastos), 'red')}
+    ${metricCard('Nómina + Comisiones', formatCOP(nominaFija + totalComisiones), 'purple')}
     ${metricCard('Costos fijos incluidos', formatCOP(totalFijos), 'blue')}
     ${metricCard('Utilidad del mes', formatCOP(utilidad), utilidad >= 0 ? 'green' : 'red')}
   </div>
@@ -1420,7 +1477,37 @@ function renderFinance() {
         <h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">Ingresos por Doctor(a) — ${monthLabel(month)}</h3>
         ${doctorRows.length ? doctorRows.map((d, i) => moneyBarItem(d.name, d.value, maxDoctor, ['var(--color-accent-green)', 'var(--color-primary)', 'var(--color-accent-yellow)', 'var(--color-accent-purple)', 'var(--color-text-faint)'][i % 5])).join('') : emptyStateHtml('Sin ingresos registrados este mes', 'Registra el primer movimiento con "+ Registrar movimiento".')}
       </div>
+
       <div class="section-card">
+        <div class="section-card-head"><h3>Nómina y Comisiones — ${monthLabel(month)}</h3></div>
+        <div class="section-card-body">
+          ${staffList.length ? staffList.map(s => {
+            if (s.payType === 'comision') {
+              const c = comisiones.find(x => x.staffId === s.id) || { produccion: 0, comision: 0 };
+              return `<div class="payroll-row">
+                <div><strong>${escapeHtml(s.name)}</strong><span class="text-faint" style="display:block;font-size:12px;">Comisión ${s.commissionPercent || 0}% sobre ${formatCOP(c.produccion)} producidos</span></div>
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <strong>${formatCOP(c.comision)}</strong>
+                  <button class="btn btn-secondary btn-sm pay-staff-btn" data-id="${s.id}" data-amount="${Math.round(c.comision)}" data-concept="Comisión ${monthLabel(month)} — ${escapeHtml(s.name)}">Registrar pago</button>
+                </div>
+              </div>`;
+            }
+            return `<div class="payroll-row">
+              <div><strong>${escapeHtml(s.name)}</strong><span class="text-faint" style="display:block;font-size:12px;">Salario fijo mensual</span></div>
+              <div style="display:flex;align-items:center;gap:10px;">
+                <strong>${formatCOP(s.monthlySalary || 0)}</strong>
+                <button class="btn btn-secondary btn-sm pay-staff-btn" data-id="${s.id}" data-amount="${Math.round(s.monthlySalary || 0)}" data-concept="Nómina ${monthLabel(month)} — ${escapeHtml(s.name)}">Registrar pago</button>
+              </div>
+            </div>`;
+          }).join('') : emptyStateHtml('Sin personal configurado', 'Agrega tu equipo en Configuración → Miembros del equipo, indicando si cobra fijo o por comisión.')}
+          <div class="payroll-total">
+            <span>Total nómina + comisiones del mes</span>
+            <strong>${formatCOP(nominaFija + totalComisiones)}</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-card" style="margin-top:20px;">
         <div class="section-card-head"><h3>Movimientos de ${monthLabel(month)}</h3></div>
         <div class="table-wrap">
           <table class="data-table">
@@ -1448,6 +1535,10 @@ function renderFinance() {
           { label: 'Ingresos', value: totalIngresos, color: 'var(--color-accent-green)' },
           { label: 'Gastos', value: totalGastos, color: 'var(--color-accent-red)' },
         ], totalIngresos + totalGastos || 1)}
+      </div>
+      <div class="card" style="margin-bottom:20px;">
+        <h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">¿En qué se va la plata?</h3>
+        ${gastoSegments.length ? donutChart(gastoSegments, gastoSegments.reduce((s, g) => s + g.value, 0) || 1) : emptyStateHtml('Sin gastos registrados este mes', '')}
       </div>
       <div class="section-card">
         <div class="section-card-head">
@@ -1480,7 +1571,7 @@ function renderFinance() {
           </select>
         </div>
         <div class="field mt-2"><label>Valor (COP) *</label><input type="number" min="0" step="1000" name="amount" id="financeAmountInput" required></div>
-        <div class="field mt-2"><label>Doctor(a) responsable</label><select name="responsible"><option value="">Selecciona...</option>${optionsFor(settings.staff)}</select></div>
+        <div class="field mt-2"><label>Doctor(a) / responsable</label><select name="responsible"><option value="">Selecciona...</option>${optionsFor(settings.staff)}</select></div>
         <div class="field mt-2"><label>Paciente (opcional)</label><select name="patientId"><option value="">Ninguno</option>${patients.map(p => `<option value="${p.id}">${escapeHtml(p.fullName)}</option>`).join('')}</select></div>
         <div class="field mt-2"><label>Fecha *</label><input type="date" name="date" required value="${todayISO()}"></div>
         <div class="field mt-2"><label>Notas</label><input type="text" name="description" placeholder="Detalle opcional"></div>
@@ -1608,6 +1699,7 @@ function renderSettings() {
   const isTreatments = settingsActiveTab === 'treatments';
   const isCosts = settingsActiveTab === 'fixedCosts';
   const isAccess = settingsActiveTab === 'financeAccess';
+  const isStaff = settingsActiveTab === 'staff';
   const visibleTabs = SETTINGS_TABS.filter(t => t.key !== 'financeAccess' || isFinanceAuthorized());
 
   return `
@@ -1634,6 +1726,7 @@ function renderSettings() {
             ${settingsActiveTab === 'statuses' ? badge(item.name, item.color) : isAccess ? `<strong>${escapeHtml(item.email)}</strong>` : `<strong>${escapeHtml(item.name)}</strong>`}
             ${isTreatments ? `<span class="settings-catalog-desc">Precio actual: ${formatCOP(item.price)}</span>` : ''}
             ${isCosts ? `<span class="settings-catalog-desc">${item.fixed ? 'Fijo mensual' : 'Variable'} · ${formatCOP(item.amount)}</span>` : ''}
+            ${isStaff ? `<span class="settings-catalog-desc">${item.payType === 'comision' ? `Comisión: ${item.commissionPercent || 0}% de lo que produce` : `Salario fijo: ${formatCOP(item.monthlySalary || 0)}/mes`}</span>` : ''}
             ${item.desc && !isAccess ? `<span class="settings-catalog-desc">${escapeHtml(item.desc)}</span>` : ''}
             ${item.active === false ? `<span class="text-faint" style="font-size:11.5px;">Deshabilitado</span>` : ''}
           </div>
@@ -1658,9 +1751,19 @@ function renderSettings() {
           <div class="field"><label>Nombre *</label><input type="text" name="name" required></div>
           <div class="field mt-2"><label>Descripción</label><input type="text" name="desc"></div>
           ${isTreatments ? `<div class="field mt-2"><label>Precio (COP) *</label><input type="number" min="0" step="1000" name="price" required></div>` : ''}
-          ${isCosts ? `
+                    ${isCosts ? `
             <div class="field mt-2"><label>Valor mensual (COP) *</label><input type="number" min="0" step="1000" name="amount" required></div>
             <div class="checkbox-row mt-2"><input type="checkbox" id="optFixed" name="fixed"><label for="optFixed">Es un costo fijo (se repite todos los meses automáticamente)</label></div>
+          ` : ''}
+          ${isStaff ? `
+            <div class="field mt-2"><label>Forma de pago *</label>
+              <select name="payType" id="staffPayType" required>
+                <option value="fijo">Salario fijo mensual</option>
+                <option value="comision">Comisión sobre lo que produce</option>
+              </select>
+            </div>
+            <div class="field mt-2" id="staffSalaryField"><label>Salario fijo mensual (COP)</label><input type="number" min="0" step="1000" name="monthlySalary" value="0"></div>
+            <div class="field mt-2" id="staffCommissionField"><label>% de comisión sobre tratamientos realizados</label><input type="number" min="0" max="100" step="1" name="commissionPercent" value="0"></div>
           ` : ''}
         `}
         <div class="form-actions">
@@ -1840,6 +1943,17 @@ function attachViewHandlers(parts) {
     const monthInput = document.getElementById('financeMonthInput');
     if (monthInput) monthInput.addEventListener('change', () => { financeMonth = monthInput.value; router(); });
 
+    document.querySelectorAll('.pay-staff-btn').forEach(b => b.addEventListener('click', () => {
+      modal.classList.add('open');
+      typeSelect.value = 'gasto';
+      refreshCategoryOptions();
+      amountInput.value = b.dataset.amount;
+      const respSelect = document.querySelector('#financeTxForm [name=responsible]');
+      if (respSelect) respSelect.value = b.dataset.id;
+      const descInput = document.querySelector('#financeTxForm [name=description]');
+      if (descInput) descInput.value = b.dataset.concept;
+    }));
+
     document.querySelectorAll('.del-finance-btn').forEach(b => b.addEventListener('click', () => {
       deleteFinanceTx(b.dataset.id);
       showToast('Movimiento eliminado');
@@ -1867,6 +1981,18 @@ function attachViewHandlers(parts) {
       document.querySelector('#optionForm [name=optionId]').value = '';
       modal.classList.add('open');
     });
+    function toggleStaffPayFields() {
+      const payType = document.querySelector('#optionForm [name=payType]');
+      if (!payType) return;
+      const salaryField = document.getElementById('staffSalaryField');
+      const commissionField = document.getElementById('staffCommissionField');
+      salaryField.style.display = payType.value === 'fijo' ? '' : 'none';
+      commissionField.style.display = payType.value === 'comision' ? '' : 'none';
+    }
+    const staffPayTypeSelect = document.getElementById('staffPayType');
+    if (staffPayTypeSelect) staffPayTypeSelect.addEventListener('change', toggleStaffPayFields);
+    toggleStaffPayFields();
+
     document.querySelectorAll('.edit-option-btn').forEach(b => b.addEventListener('click', () => {
       const settings = getSettings();
       const item = settings[settingsActiveTab].find(o => o.id === b.dataset.id);
@@ -1881,6 +2007,16 @@ function attachViewHandlers(parts) {
         if (settingsActiveTab === 'fixedCosts') {
           document.querySelector('#optionForm [name=amount]').value = item.amount || 0;
           document.querySelector('#optionForm [name=fixed]').checked = !!item.fixed;
+        }
+        if (settingsActiveTab === 'fixedCosts') {
+          document.querySelector('#optionForm [name=amount]').value = item.amount || 0;
+          document.querySelector('#optionForm [name=fixed]').checked = !!item.fixed;
+        }
+        if (settingsActiveTab === 'staff') {
+          document.querySelector('#optionForm [name=payType]').value = item.payType || 'fijo';
+          document.querySelector('#optionForm [name=monthlySalary]').value = item.monthlySalary || 0;
+          document.querySelector('#optionForm [name=commissionPercent]').value = item.commissionPercent || 0;
+          toggleStaffPayFields();
         }
       }
       modal.classList.add('open');
@@ -1911,6 +2047,11 @@ function attachViewHandlers(parts) {
         payload = { name: data.name, desc: data.desc };
         if (settingsActiveTab === 'treatments') payload.price = Number(data.price) || 0;
         if (settingsActiveTab === 'fixedCosts') { payload.amount = Number(data.amount) || 0; payload.fixed = data.fixed === 'on'; }
+        if (settingsActiveTab === 'staff') {
+          payload.payType = data.payType || 'fijo';
+          payload.monthlySalary = Number(data.monthlySalary) || 0;
+          payload.commissionPercent = Number(data.commissionPercent) || 0;
+        }
       }
       if (data.optionId) {
         updateSettingOption(settingsActiveTab, data.optionId, payload);
