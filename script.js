@@ -1087,13 +1087,13 @@ function renderPatientForm(editId) {
           <input type="text" name="phoneCodeText" list="countryCodeList" class="phone-code-input"
             placeholder="País" autocomplete="off"
             value="${escapeHtml(phoneCodeDisplay(patient?.phoneCode || '+57'))}">
-          <input type="tel" name="phone" placeholder="300 123 4567" required value="${escapeHtml(patient?.phone || '')}">
+          <input type="tel" name="phone" placeholder="300 123 4567" value="${escapeHtml(patient?.phone || '')}">
         </div>
         <datalist id="countryCodeList">
           ${COUNTRIES.map(([name, code]) => `<option value="${escapeHtml(name)} (${code})">`).join('')}
         </datalist>
       </div>
-      <div class="field"><label>Correo Electrónico *</label><input type="email" name="email" placeholder="ejemplo@correo.com" required value="${escapeHtml(patient?.email || '')}"></div>
+      <div class="field"><label>Correo Electrónico *</label><input type="email" name="email" placeholder="ejemplo@correo.com"  value="${escapeHtml(patient?.email || '')}"></div>
       
       <div class="field">
         <label>Estado ${isEdit ? '' : 'Inicial'} *</label>
@@ -1115,7 +1115,7 @@ function renderPatientForm(editId) {
         <span class="field-hint">Selecciona una o varias razones por las cuales el paciente pasa a inactivo.</span>
       </div>
 
-      <div class="field"><label>Origen de Paciente *</label><select name="origin" required><option value="">Selecciona...</option>${optionsFor(settings.origins, patient?.origin)}</select></div>
+      <div class="field"><label>Origen de Paciente *</label><select name="origin" ><option value="">Selecciona...</option>${optionsFor(settings.origins, patient?.origin)}</select></div>
       <div class="field">
         <label>País de Origen</label>
         <input type="text" name="countryOfOrigin" list="countryNameList" placeholder="Escribe para buscar..." autocomplete="off" value="${escapeHtml(patient?.countryOfOrigin || 'Colombia')}">
