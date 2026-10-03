@@ -1532,9 +1532,27 @@ function renderReports() {
       </div>
       <div class="card">
         <h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">Motivos de Inactividad</h3>
-        ${settings.inactivityReasons.filter(r => r.active).length ? settings.inactivityReasons.filter(r => r.active).map(r => `
-          <div class="legend-item" style="padding:6px 0;"><span class="lg-left"><i class="legend-dot" style="background:var(--color-primary)"></i>${escapeHtml(r.name)}</span><strong>—</strong></div>
-        `).join('') : emptyStateHtml('Sin motivos configurados', '')}
+        ${settings.inactivityReasons.filter(r => r.active).length ? settings.inactivityReasons.filter(r => r.active).map(r => {
+          // 1. Contamos cuántos pacientes tienen asignado este ID de motivo
+          const count = patients.filter(p => {
+            const reasons = Array.isArray(p.inactivityReasons)
+              ? p.inactivityReasons
+              : (p.inactivityReasons || '').split(',').filter(Boolean);
+            
+            return reasons.includes(r.id);
+          }).length;
+
+          // 2. Renderizamos la cantidad calculada en <strong>${count}</strong>
+          return `
+            <div class="legend-item" style="padding:6px 0;">
+              <span class="lg-left">
+                <i class="legend-dot" style="background:var(--color-primary)"></i>
+                ${escapeHtml(r.name)}
+              </span>
+              <strong>${count}</strong>
+            </div>
+          `;
+        }).join('') : emptyStateHtml('Sin motivos configurados', '')}
       </div>
     </div>
     <div class="card" style="margin-top:20px;">
