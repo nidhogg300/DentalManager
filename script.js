@@ -1062,6 +1062,11 @@ function renderPatientForm(editId) {
   if (isEdit && !patient) return emptyStateHtml('Paciente no encontrado', '');
   const settings = getSettings();
 
+  const isInactive = (patient?.status === 'inactivo');
+  const selectedReasons = Array.isArray(patient?.inactivityReasons)
+    ? patient.inactivityReasons
+    : (patient?.inactivityReasons || '').split(',').filter(Boolean);
+
   return `
   <div class="page-head">
     <div>
@@ -1076,7 +1081,7 @@ function renderPatientForm(editId) {
     <div class="form-section-title">1. Datos Obligatorios</div>
     <div class="form-grid">
       <div class="field"><label>Nombre Completo *</label><input type="text" name="fullName" placeholder="Ej: Carlos Andrés Mendoza" required value="${escapeHtml(patient?.fullName || '')}"></div>
-            <div class="field">
+      <div class="field">
         <label>Teléfono Móvil *</label>
         <div class="phone-input-group">
           <input type="text" name="phoneCodeText" list="countryCodeList" class="phone-code-input"
@@ -1089,7 +1094,27 @@ function renderPatientForm(editId) {
         </datalist>
       </div>
       <div class="field"><label>Correo Electrónico *</label><input type="email" name="email" placeholder="ejemplo@correo.com" required value="${escapeHtml(patient?.email || '')}"></div>
-      <div class="field"><label>Estado ${isEdit ? '' : 'Inicial'} *</label><select name="status" required>${optionsFor(settings.statuses, patient?.status || 'nuevo')}</select></div>
+      
+      <div class="field">
+        <label>Estado ${isEdit ? '' : 'Inicial'} *</label>
+        <select name="status" required id="statusSelect">${optionsFor(settings.statuses, patient?.status || 'nuevo')}</select>
+      </div>
+
+      <!-- Recuadro dinámico para Causas de Inactividad -->
+      <div class="field full" id="inactivityReasonGroup" style="display: ${isInactive ? 'block' : 'none'};">
+        <label>Causa(s) de Inactividad *</label>
+        <div class="chip-select-group" id="inactivityReasonChips">
+          ${(settings.inactivityReasons || []).filter(r => r.active !== false).map(r => {
+            const checked = selectedReasons.includes(r.id);
+            return `<label class="chip-toggle ${checked ? 'active' : ''}">
+              <input type="checkbox" name="inactivityReason" value="${r.id}" ${checked ? 'checked' : ''}>
+              <span>${escapeHtml(r.name)}</span>
+            </label>`;
+          }).join('')}
+        </div>
+        <span class="field-hint">Selecciona una o varias razones por las cuales el paciente pasa a inactivo.</span>
+      </div>
+
       <div class="field"><label>Origen de Paciente *</label><select name="origin" required><option value="">Selecciona...</option>${optionsFor(settings.origins, patient?.origin)}</select></div>
       <div class="field">
         <label>País de Origen</label>
@@ -1127,6 +1152,32 @@ function renderPatientForm(editId) {
   </form>
   `;
 }
+
+document.addEventListener('change', (e) => {
+  if (e.target && e.target.name === 'status') {
+    const reasonGroup = document.getElementById('inactivityReasonGroup');
+    if (reasonGroup) {
+      const isInactive = e.target.value === 'inactivo';
+      reasonGroup.style.display = isInactive ? 'block' : 'none';
+      
+      // Opcional: Desmarcar checkboxes si deja de ser inactivo
+      if (!isInactive) {
+        reasonGroup.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+          cb.checked = false;
+          cb.closest('.chip-toggle')?.classList.remove('active');
+        });
+      }
+    }
+  }
+
+  // Toggle de la clase visual para los chips
+  if (e.target && e.target.closest('#inactivityReasonChips')) {
+    const label = e.target.closest('.chip-toggle');
+    if (label) {
+      label.classList.toggle('active', e.target.checked);
+    }
+  }
+});
 
 /* ============================== FOLLOW-UPS LIST ============================== */
 let followUpTab = 'hoy';
