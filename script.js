@@ -190,6 +190,7 @@ function mapPatientRow(r) {
     dentalMap: r.dental_map || null,
     phoneCode: r.phone_code || '+57',
     countryOfOrigin: r.country_of_origin || 'Colombia',
+    inactivityReasons: r.inactivity_reasons ? r.inactivity_reasons.split(',').filter(Boolean) : [],
   };
 }
 function mapFollowUpRow(r) {
@@ -262,6 +263,7 @@ function createPatient(data) {
     createdAt: new Date().toISOString(),
     phoneCode: data.phoneCode || '+57',
     countryOfOrigin: data.countryOfOrigin || 'Colombia',
+    inactivityReasons: Array.isArray(data.inactivityReasons) ? data.inactivityReasons : [],
   };
   CACHE.patients.unshift(patient);
   supabaseClient.from('patients').insert({
@@ -270,8 +272,22 @@ function createPatient(data) {
     responsible: patient.responsible, cedula: patient.cedula, address: patient.address,
     notes: patient.notes, created_at: patient.createdAt,
     phone_code: patient.phoneCode, country_of_origin: patient.countryOfOrigin,
+    inactivity_reasons: (patient.inactivityReasons || []).join(','),
   }).then(({ error }) => { if (error) reportSyncError('guardar paciente', error); });
   return patient;
+}
+// Lee el formulario de paciente. Object.fromEntries solo conserva el ÚLTIMO valor de los
+// checkboxes con el mismo nombre, por eso tratamientos y motivos se juntan con getAll().
+function formToPatientData(form) {
+  const fd = new FormData(form);
+  const data = Object.fromEntries(fd.entries());
+  data.treatment = fd.getAll('treatment').join(',');
+  data.inactivityReasons = data.status === 'inactivo' ? fd.getAll('inactivityReason') : [];
+  delete data.inactivityReason;
+  const codeMatch = (data.phoneCodeText || '').match(/\(([^)]+)\)\s*$/);
+  data.phoneCode = codeMatch ? codeMatch[1] : '+57';
+  delete data.phoneCodeText;
+  return data;
 }
 function updatePatient(id, data) {
   const patients = getPatients();
@@ -279,11 +295,13 @@ function updatePatient(id, data) {
   if (idx === -1) return null;
   patients[idx] = { ...patients[idx], ...data };
   const p = patients[idx];
+  if (p.status !== 'inactivo') p.inactivityReasons = [];
   supabaseClient.from('patients').update({
     full_name: p.fullName, status: p.status, phone: p.phone, email: p.email, origin: p.origin,
     treatment: p.treatment, responsible: p.responsible, cedula: p.cedula, address: p.address,
     notes: p.notes, last_visit: p.lastVisit,
     phone_code: p.phoneCode, country_of_origin: p.countryOfOrigin,
+    inactivity_reasons: (p.inactivityReasons || []).join(','),
   }).eq('id', id).then(({ error }) => { if (error) reportSyncError('actualizar paciente', error); });
   return patients[idx];
 }
@@ -1539,7 +1557,7 @@ function renderReports() {
               ? p.inactivityReasons
               : (p.inactivityReasons || '').split(',').filter(Boolean);
             
-            return reasons.includes(r.id);
+            return p.status === 'inactivo' && reasons.includes(r.id);
           }).length;
 
           // 2. Renderizamos la cantidad calculada en <strong>${count}</strong>
@@ -1691,14 +1709,8 @@ function attachViewHandlers(parts) {
     }
     document.getElementById('patientForm').addEventListener('submit', (e) => {
       e.preventDefault();
-      const fd = new FormData(e.target);
-      const treatments = fd.getAll('treatment');
-      if (!treatments.length) { showToast('Selecciona al menos un tratamiento de interés'); return; }
-      const data = Object.fromEntries(fd.entries());
-      data.treatment = treatments.join(',');
-      const codeMatch = (data.phoneCodeText || '').match(/\(([^)]+)\)\s*$/);
-      data.phoneCode = codeMatch ? codeMatch[1] : '+57';
-      delete data.phoneCodeText;
+      const data = formToPatientData(e.target);
+      if (!data.treatment) { showToast('Selecciona al menos un tratamiento de interés'); return; }
       const patient = createPatient(data);
       if (data.addTaskNow) {
         location.hash = `#/pacientes/${patient.id}`;
@@ -1727,14 +1739,8 @@ function attachViewHandlers(parts) {
     }
     document.getElementById('patientForm').addEventListener('submit', (e) => {
       e.preventDefault();
-      const fd = new FormData(e.target);
-      const treatments = fd.getAll('treatment');
-      if (!treatments.length) { showToast('Selecciona al menos un tratamiento de interés'); return; }
-      const data = Object.fromEntries(fd.entries());
-      data.treatment = treatments.join(',');
-      const codeMatch = (data.phoneCodeText || '').match(/\(([^)]+)\)\s*$/);
-      data.phoneCode = codeMatch ? codeMatch[1] : '+57';
-      delete data.phoneCodeText;
+      const data = formToPatientData(e.target);
+      if (!data.treatment) { showToast('Selecciona al menos un tratamiento de interés'); return; }
       updatePatient(parts[1], data);
       document.getElementById('formAlert').innerHTML = `<div class="alert-success">✓ Cambios listos para guardar. Se ha verificado la información del expediente clínico.</div>`;
       showToast('Cambios guardados correctamente');
