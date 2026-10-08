@@ -166,7 +166,7 @@ function phoneCodeDisplay(code) {
    la escritura remota falla, se avisa pero no se revierte la UI local
    (para eso, recarga la página y vuelve a intentar).
    ========================================================================= */
-const CACHE = { patients: [], followUps: [], financeTx: [], settings: DEFAULT_SETTINGS, ready: false, userEmail: null };
+const CACHE = { patients: [], followUps: [], financeTx: [], visits: [], settings: DEFAULT_SETTINGS, ready: false, userEmail: null };
 
 function uid(prefix) {
   // Se usa como id temporal antes de tener respuesta de Supabase; para
@@ -204,7 +204,13 @@ function mapFinanceRow(r) {
   return {
     id: r.id, type: r.type, category: r.category, amount: Number(r.amount) || 0,
     responsible: r.responsible, patientId: r.patient_id, description: r.description,
-    date: r.date, createdAt: r.created_at,
+    date: r.date, createdAt: r.created_at, visitId: r.visit_id || null,
+  };
+}
+function mapVisitRow(r) {
+  return {
+    id: r.id, patientId: r.patient_id, date: r.date, responsible: r.responsible || '',
+    items: Array.isArray(r.items) ? r.items : [], notes: r.notes || '', createdAt: r.created_at,
   };
 }
 
@@ -215,20 +221,23 @@ async function loadAllData() {
   const { data: { user } } = await supabaseClient.auth.getUser();
   CACHE.userEmail = (user && user.email) ? user.email.toLowerCase() : null;
 
-  const [patientsRes, followUpsRes, financeRes, settingsRes] = await Promise.all([
+  const [patientsRes, followUpsRes, financeRes, settingsRes, visitsRes] = await Promise.all([
     supabaseClient.from('patients').select('*').order('created_at', { ascending: false }),
     supabaseClient.from('follow_ups').select('*').order('created_at', { ascending: false }),
     supabaseClient.from('finance_transactions').select('*').order('date', { ascending: false }),
     supabaseClient.from('app_settings').select('data').eq('id', 1).single(),
+    supabaseClient.from('patient_visits').select('*').order('date', { ascending: false }),
   ]);
   if (patientsRes.error) reportSyncError('cargar pacientes', patientsRes.error);
   if (followUpsRes.error) reportSyncError('cargar seguimientos', followUpsRes.error);
   if (financeRes.error) reportSyncError('cargar finanzas', financeRes.error);
   if (settingsRes.error) reportSyncError('cargar configuración', settingsRes.error);
+  if (visitsRes.error) reportSyncError('cargar visitas', visitsRes.error);
 
   CACHE.patients = (patientsRes.data || []).map(mapPatientRow);
   CACHE.followUps = (followUpsRes.data || []).map(mapFollowUpRow);
   CACHE.financeTx = (financeRes.data || []).map(mapFinanceRow);
+  CACHE.visits = (visitsRes.data || []).map(mapVisitRow);
   CACHE.settings = { ...DEFAULT_SETTINGS, ...((settingsRes.data && settingsRes.data.data) || {}) };
   CACHE.ready = true;
 }
@@ -361,13 +370,14 @@ function createFinanceTx(data) {
     patientId: data.patientId || null,
     description: data.description || '',
     date: data.date || todayISO(),
+    visitId: data.visitId || null,
     createdAt: new Date().toISOString(),
   };
   CACHE.financeTx.unshift(tx);
   supabaseClient.from('finance_transactions').insert({
     id: tx.id, type: tx.type, category: tx.category, amount: tx.amount,
     responsible: tx.responsible, patient_id: tx.patientId || null,
-    description: tx.description, date: tx.date, created_at: tx.createdAt,
+    description: tx.description, date: tx.date, created_at: tx.createdAt, visit_id: tx.visitId,
   }).then(({ error }) => { if (error) reportSyncError('guardar movimiento financiero', error); });
   return tx;
 }
@@ -376,7 +386,62 @@ function deleteFinanceTx(id) {
   supabaseClient.from('finance_transactions').delete().eq('id', id)
     .then(({ error }) => { if (error) reportSyncError('eliminar movimiento financiero', error); });
 }
+// --- Visitas (procedimientos realizados a cada paciente) ---
+function staffCommissionPct(staff, treatmentId) {
+  if (!staff || (staff.payType !== 'comision' && staff.payType !== 'mixto')) return 0;
+  const rates = staff.commissionByTreatment || {};
+  return rates[treatmentId] !== undefined ? Number(rates[treatmentId]) : (Number(staff.commissionPercent) || 0);
+}
+function getVisits() { return CACHE.visits; }
+function getVisitsByPatient(patientId) {
+  return getVisits().filter(v => v.patientId === patientId)
+    .sort((a, b) => (b.date || '').localeCompare(a.date || '') || new Date(b.createdAt) - new Date(a.createdAt));
+}
+function visitTotal(v) { return (v.items || []).reduce((s, i) => s + (Number(i.paid) || 0), 0); }
 
+// Guarda la visita y genera UN ingreso en Finanzas por cada procedimiento cobrado.
+function createVisit(data) {
+  const visit = {
+    id: newId(),
+    patientId: data.patientId,
+    date: data.date || todayISO(),
+    responsible: data.responsible || '',
+    items: (data.items || []).map(i => ({ treatmentId: i.treatmentId, price: Number(i.price) || 0, paid: Number(i.paid) || 0 })),
+    notes: data.notes || '',
+    createdAt: new Date().toISOString(),
+  };
+  CACHE.visits.unshift(visit);
+  supabaseClient.from('patient_visits').insert({
+    id: visit.id, patient_id: visit.patientId, date: visit.date, responsible: visit.responsible || null,
+    items: visit.items, notes: visit.notes, created_at: visit.createdAt,
+  }).then(({ error }) => { if (error) reportSyncError('guardar visita', error); });
+
+  visit.items.forEach(item => {
+    if (item.paid <= 0) return; // sin cobro (p. ej. valoración gratuita) no genera ingreso
+    createFinanceTx({
+      type: 'ingreso', category: item.treatmentId, amount: item.paid,
+      responsible: visit.responsible, patientId: visit.patientId,
+      description: 'Visita ' + visit.date, date: visit.date, visitId: visit.id,
+    });
+  });
+  syncLastVisit(visit.patientId);
+  return visit;
+}
+function syncLastVisit(patientId) {
+  const dates = getVisitsByPatient(patientId).map(v => v.date).filter(Boolean).sort();
+  updatePatient(patientId, { lastVisit: dates.length ? dates[dates.length - 1] : null });
+}
+function deleteVisit(id) {
+  const v = CACHE.visits.find(x => x.id === id);
+  if (!v) return;
+  CACHE.visits = CACHE.visits.filter(x => x.id !== id);
+  CACHE.financeTx = CACHE.financeTx.filter(t => t.visitId !== id);
+  supabaseClient.from('finance_transactions').delete().eq('visit_id', id)
+    .then(({ error }) => { if (error) reportSyncError('eliminar ingresos de la visita', error); });
+  supabaseClient.from('patient_visits').delete().eq('id', id)
+    .then(({ error }) => { if (error) reportSyncError('eliminar visita', error); });
+  syncLastVisit(v.patientId);
+}
 // --- Salud dental (Dentograma 3D) ---
 // Los datos del dentograma viven comprimidos en patients.dental_map (jsonb):
 // { name, date, general, s: {diente: código}, x: {diente: 'códigos previos'}, t: {diente: nota corta} }
@@ -994,6 +1059,8 @@ function renderPatientProfile(id) {
     return `${emptyStateHtml('Paciente no encontrado', 'Selecciona un paciente desde el listado.')}<div class="mt-4"><a href="#/pacientes" class="btn btn-secondary">Volver a Pacientes</a></div>`;
   }
   const followUps = getFollowUpsByPatient(patient.id);
+  const visits = getVisitsByPatient(patient.id);
+  const canSeeMoney = isFinanceAuthorized();
 
   return `
   <div class="profile-head">
@@ -1012,9 +1079,12 @@ function renderPatientProfile(id) {
     <div>
       ${oralHealthWidget(patient)}
       <div class="section-card">
-        <div class="section-card-head"><h3>Notas Generales de Gestión</h3></div>
+        <div class="section-card-head">
+          <h3>Visitas y Tratamientos</h3>
+          <button class="btn btn-primary btn-sm" id="addVisitBtn">+ Registrar visita</button>
+        </div>
         <div class="section-card-body">
-          <p style="padding:12px 0;color:var(--color-text-soft);font-size:13px;">${patient.notes ? escapeHtml(patient.notes) : 'Sin notas registradas para este paciente.'}</p>
+          ${visits.length ? visits.map(v => visitCardHtml(v, canSeeMoney)).join('') : emptyStateHtml('Sin visitas registradas', 'Registra la primera visita para dejar el reporte del procedimiento y calcular lo que corresponde a cada doctor.')}
         </div>
       </div>
 
@@ -1059,6 +1129,12 @@ function renderPatientProfile(id) {
           <div class="info-row"><span class="info-label">Última Visita</span><span class="info-value">${patient.lastVisit ? formatDate(patient.lastVisit) : '—'}</span></div>
         </div>
       </div>
+      <div class="section-card">
+        <div class="section-card-head"><h3 style="font-size:13px;">Notas generales de gestión</h3></div>
+        <div class="section-card-body">
+          <p style="padding:6px 0;color:var(--color-text-soft);font-size:12px;line-height:1.45;max-height:96px;overflow-y:auto;">${patient.notes ? escapeHtml(patient.notes) : 'Sin notas registradas.'}</p>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1078,7 +1154,25 @@ function renderPatientProfile(id) {
       </form>
     </div>
   </div>
-
+    <!-- Registrar visita -->
+  <div class="modal-overlay" id="visitModal">
+    <div class="modal">
+      <h3>Registrar visita</h3>
+      <form id="visitForm">
+        <div class="field"><label>Fecha *</label><input type="date" name="date" required value="${todayISO()}"></div>
+        <div class="field mt-2"><label>Doctor(a) que atendió *</label><select name="responsible" id="visitDoctor" required><option value="">Selecciona...</option>${optionsFor(getSettings().staff, patient.responsible)}</select></div>
+        <p class="text-faint" style="font-size:12px;margin:14px 0 6px;">Procedimientos realizados y valor cobrado</p>
+        <div id="visitItems"></div>
+        <button type="button" class="btn btn-secondary btn-sm" id="addVisitItemBtn">+ Agregar otro procedimiento</button>
+        <div class="field mt-2"><label>Reporte del procedimiento</label><textarea name="notes" placeholder="Qué se hizo, hallazgos, indicaciones..."></textarea></div>
+        <p id="visitSummary" class="text-faint" style="font-size:12.5px;margin-top:10px;"></p>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" id="cancelVisitModal">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Guardar visita</button>
+        </div>
+      </form>
+    </div>
+  </div>
   <!-- Dentograma 3D -->
   <div class="modal-overlay dentogram-overlay" id="dentogramModal">
     <div class="modal dentogram-modal">
@@ -1087,6 +1181,24 @@ function renderPatientProfile(id) {
     </div>
   </div>
   `;
+}
+function visitCardHtml(v, canSeeMoney) {
+  const staff = getSettings().staff.find(s => s.id === v.responsible);
+  const share = (v.items || []).reduce((s, i) => s + (Number(i.paid) || 0) * staffCommissionPct(staff, i.treatmentId) / 100, 0);
+  return `<div style="padding:12px 0;border-bottom:1px solid var(--color-border);">
+    <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
+      <div><strong>${formatDate(v.date)}</strong><span class="text-faint" style="font-size:12.5px;"> · ${escapeHtml(staffLabel(v.responsible))}</span></div>
+      ${canSeeMoney ? `<strong>${formatCOP(visitTotal(v))}</strong>` : ''}
+    </div>
+    <ul style="margin:6px 0 0 18px;font-size:13px;">
+      ${(v.items || []).map(i => `<li>${escapeHtml(treatmentLabel(i.treatmentId))}${canSeeMoney ? ` — ${formatCOP(i.paid)}` : ''}</li>`).join('')}
+    </ul>
+    ${v.notes ? `<p class="timeline-note">${escapeHtml(v.notes)}</p>` : ''}
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">
+      <span class="text-faint" style="font-size:12px;">${canSeeMoney && share > 0 ? `Le corresponde a ${escapeHtml(staffLabel(v.responsible))}: ${formatCOP(share)}` : ''}</span>
+      <button class="action-link muted del-visit-btn" data-id="${v.id}">Eliminar</button>
+    </div>
+  </div>`;
 }
 /* Pastilla de Salud Oral: usa el mismo estilo de anillo (y el titileo en rojo) del
    dentograma 3D. Es seleccionable: al tocarla abre el dentograma completo. */
@@ -1431,9 +1543,11 @@ function renderFinance() {
   const totalGastosManual = gastosVariables.reduce((s, t) => s + t.amount, 0);
 
   const staffList = settings.staff.filter(s => s.active !== false);
-  const nominaFija = staffList.filter(s => s.payType === 'fijo')
+  const hasSalary = s => s.payType === 'fijo' || s.payType === 'mixto';
+  const hasCommission = s => s.payType === 'comision' || s.payType === 'mixto';
+  const nominaFija = staffList.filter(hasSalary)
     .reduce((sum, s) => sum + (Number(s.monthlySalary) || 0), 0);
-  const comisiones = staffList.filter(s => s.payType === 'comision').map(s => {
+  const comisiones = staffList.filter(hasCommission).map(s => {
     const rates = s.commissionByTreatment || {};
     const defaultPct = Number(s.commissionPercent) || 0;
     const byTreat = {};
@@ -1522,35 +1636,30 @@ function renderFinance() {
         <div class="section-card-head"><h3>Nómina y Comisiones — ${monthLabel(month)}</h3></div>
         <div class="section-card-body">
           ${staffList.length ? staffList.map(s => {
+            const salary = hasSalary(s) ? (Number(s.monthlySalary) || 0) : 0;
+            const c = comisiones.find(x => x.staffId === s.id) || { produccion: 0, comision: 0, lines: [] };
+            const generado = ingresos.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
+            const debido = salary + c.comision;
             const pagado = pagosNomina.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
-            const pagadoTxt = pagado > 0 ? `<span style="display:block;font-size:12px;color:var(--color-accent-green);">Pagado este mes: ${formatCOP(pagado)}</span>` : '';
-            if (s.payType === 'comision') {
-              const c = comisiones.find(x => x.staffId === s.id) || { produccion: 0, comision: 0, lines: [] };
-              return `<div class="payroll-row">
-                <div>
-                  <strong>${escapeHtml(s.name)}</strong>
-                  <span class="text-faint" style="display:block;font-size:12px;">Producido: ${formatCOP(c.produccion)}</span>
-                  ${c.lines.map(l => `<span class="text-faint" style="display:block;font-size:11.5px;">· ${l.treatmentId ? escapeHtml(treatmentLabel(l.treatmentId)) : 'Sin tratamiento'}: ${formatCOP(l.produccion)} × ${l.pct}% = ${formatCOP(l.comision)}</span>`).join('')}
-                  ${pagadoTxt}
-                </div>
-                <div style="display:flex;align-items:center;gap:10px;">
-                  <strong>${formatCOP(c.comision)}</strong>
-                  <button class="btn btn-secondary btn-sm pay-staff-btn" data-id="${s.id}" data-amount="${Math.round(c.comision)}" data-concept="Comisión ${monthLabel(month)} — ${escapeHtml(s.name)}">Registrar pago</button>
-                </div>
-              </div>`;
-            }
+            const pendiente = Math.max(0, debido - pagado);
+            const tipo = s.payType === 'mixto' ? 'Salario fijo + comisión' : s.payType === 'comision' ? 'Solo comisión' : 'Salario fijo mensual';
             return `<div class="payroll-row">
               <div>
                 <strong>${escapeHtml(s.name)}</strong>
-                <span class="text-faint" style="display:block;font-size:12px;">Salario fijo mensual</span>
-                ${pagadoTxt}
+                <span class="text-faint" style="display:block;font-size:12px;">${tipo} · Generó en el mes: ${formatCOP(generado)}</span>
+                ${salary ? `<span class="text-faint" style="display:block;font-size:11.5px;">· Salario fijo: ${formatCOP(salary)}</span>` : ''}
+                ${c.lines.map(l => `<span class="text-faint" style="display:block;font-size:11.5px;">· ${l.treatmentId ? escapeHtml(treatmentLabel(l.treatmentId)) : 'Sin tratamiento'}: ${formatCOP(l.produccion)} × ${l.pct}% = ${formatCOP(l.comision)}</span>`).join('')}
+                ${pagado > 0 ? `<span style="display:block;font-size:12px;color:var(--color-accent-green);">Pagado este mes: ${formatCOP(pagado)}</span>` : ''}
               </div>
               <div style="display:flex;align-items:center;gap:10px;">
-                <strong>${formatCOP(s.monthlySalary || 0)}</strong>
-                <button class="btn btn-secondary btn-sm pay-staff-btn" data-id="${s.id}" data-amount="${Math.round(s.monthlySalary || 0)}" data-concept="Nómina ${monthLabel(month)} — ${escapeHtml(s.name)}">Registrar pago</button>
+                <div style="text-align:right;">
+                  <strong>${formatCOP(debido)}</strong>
+                  <span class="text-faint" style="display:block;font-size:11.5px;">Pendiente: ${formatCOP(pendiente)}</span>
+                </div>
+                <button class="btn btn-secondary btn-sm pay-staff-btn" data-id="${s.id}" data-amount="${Math.round(pendiente)}" data-concept="Nómina ${monthLabel(month)} — ${escapeHtml(s.name)}">Registrar pago</button>
               </div>
             </div>`;
-          }).join('') : emptyStateHtml('Sin personal configurado', 'Agrega tu equipo en Configuración → Miembros del equipo, indicando si cobra fijo o por comisión.')}
+          }).join('') : emptyStateHtml('Sin personal configurado', 'Agrega tu equipo en Configuración → Miembros del equipo, indicando si cobra fijo, por comisión o ambos.')}
           <div class="payroll-total">
             <span>Total nómina + comisiones del mes</span>
             <strong>${formatCOP(nominaFija + totalComisiones)}</strong>
@@ -1777,7 +1886,7 @@ function renderSettings() {
             ${settingsActiveTab === 'statuses' ? badge(item.name, item.color) : isAccess ? `<strong>${escapeHtml(item.email)}</strong>` : `<strong>${escapeHtml(item.name)}</strong>`}
             ${isTreatments ? `<span class="settings-catalog-desc">Precio actual: ${formatCOP(item.price)}</span>` : ''}
             ${isCosts ? `<span class="settings-catalog-desc">${item.fixed ? 'Fijo mensual' : 'Variable'} · ${formatCOP(item.amount)}</span>` : ''}
-            ${isStaff ? `<span class="settings-catalog-desc">${item.payType === 'comision' ? `Comisión por tratamiento (${Object.keys(item.commissionByTreatment || {}).length} definidos · por defecto ${item.commissionPercent || 0}%)` : `Salario fijo: ${formatCOP(item.monthlySalary || 0)}/mes`}</span>` : ''}
+            ${isStaff ? `<span class="settings-catalog-desc">${item.payType === 'comision' ? `Solo comisión (${Object.keys(item.commissionByTreatment || {}).length} definidos · por defecto ${item.commissionPercent || 0}%)` : item.payType === 'mixto' ? `Fijo ${formatCOP(item.monthlySalary || 0)}/mes + comisión (${Object.keys(item.commissionByTreatment || {}).length} definidos · por defecto ${item.commissionPercent || 0}%)` : `Salario fijo: ${formatCOP(item.monthlySalary || 0)}/mes`}</span>` : ''}
             ${item.desc && !isAccess ? `<span class="settings-catalog-desc">${escapeHtml(item.desc)}</span>` : ''}
             ${item.active === false ? `<span class="text-faint" style="font-size:11.5px;">Deshabilitado</span>` : ''}
           </div>
@@ -1810,7 +1919,8 @@ function renderSettings() {
             <div class="field mt-2"><label>Forma de pago *</label>
               <select name="payType" id="staffPayType" required>
                 <option value="fijo">Salario fijo mensual</option>
-                <option value="comision">Comisión sobre lo que produce</option>
+                <option value="comision">Solo comisión sobre lo que produce</option>
+                <option value="mixto">Salario fijo + comisión</option>
               </select>
             </div>
             <div class="field mt-2" id="staffSalaryField"><label>Salario fijo mensual (COP)</label><input type="number" min="0" step="1000" name="monthlySalary" value="0"></div>
@@ -1928,6 +2038,78 @@ function attachViewHandlers(parts) {
     });
     const exportBtn = document.getElementById('exportHistoryBtn');
     if (exportBtn) exportBtn.addEventListener('click', () => showToast('Exportación de historial disponible próximamente'));
+      // --- Registrar visita ---
+    const visitModal = document.getElementById('visitModal');
+    if (visitModal) {
+      const itemsBox = document.getElementById('visitItems');
+      const summary = document.getElementById('visitSummary');
+      const doctorSel = document.getElementById('visitDoctor');
+      const treatOptions = '<option value="">Tratamiento...</option>' + getSettings().treatments.filter(t => t.active !== false)
+        .map(t => `<option value="${t.id}" data-price="${t.price || 0}">${escapeHtml(t.name)}</option>`).join('');
+
+      function refreshVisitSummary() {
+        if (!isFinanceAuthorized()) { summary.textContent = ''; return; }
+        const staff = getSettings().staff.find(s => s.id === doctorSel.value);
+        let total = 0, share = 0;
+        itemsBox.querySelectorAll('.visit-item-row').forEach(row => {
+          const paid = Number(row.querySelector('input').value) || 0;
+          total += paid;
+          share += paid * staffCommissionPct(staff, row.querySelector('select').value) / 100;
+        });
+        summary.textContent = `Total cobrado: ${formatCOP(total)}` + (share > 0 ? ` · Comisión para ${staff.name}: ${formatCOP(share)}` : '');
+      }
+      function addVisitRow() {
+        const row = document.createElement('div');
+        row.className = 'visit-item-row';
+        row.style.cssText = 'display:grid;grid-template-columns:1fr 130px 28px;gap:8px;margin-bottom:8px;align-items:center;';
+        row.innerHTML = `<select required>${treatOptions}</select>
+          <input type="number" min="0" step="1000" placeholder="Valor cobrado" required>
+          <button type="button" class="action-link muted" title="Quitar" style="color:var(--color-accent-red)">✕</button>`;
+        const sel = row.querySelector('select'), inp = row.querySelector('input');
+        sel.addEventListener('change', () => {
+          const o = sel.selectedOptions[0];
+          if (o && o.dataset.price) inp.value = o.dataset.price; // precio del tratamiento, editable
+          refreshVisitSummary();
+        });
+        inp.addEventListener('input', refreshVisitSummary);
+        row.querySelector('button').addEventListener('click', () => {
+          if (itemsBox.children.length > 1) { row.remove(); refreshVisitSummary(); }
+        });
+        itemsBox.appendChild(row);
+      }
+
+      const addVisitBtn = document.getElementById('addVisitBtn');
+      if (addVisitBtn) addVisitBtn.addEventListener('click', () => {
+        itemsBox.innerHTML = '';
+        addVisitRow();
+        refreshVisitSummary();
+        visitModal.classList.add('open');
+      });
+      document.getElementById('addVisitItemBtn').addEventListener('click', addVisitRow);
+      doctorSel.addEventListener('change', refreshVisitSummary);
+      document.getElementById('cancelVisitModal').addEventListener('click', () => visitModal.classList.remove('open'));
+
+      document.getElementById('visitForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const items = [...itemsBox.querySelectorAll('.visit-item-row')].map(row => {
+          const sel = row.querySelector('select');
+          const o = sel.selectedOptions[0];
+          return { treatmentId: sel.value, price: Number(o && o.dataset.price) || 0, paid: Number(row.querySelector('input').value) || 0 };
+        }).filter(i => i.treatmentId);
+        if (!items.length) { showToast('Agrega al menos un procedimiento'); return; }
+        createVisit({ patientId: parts[1], date: fd.get('date'), responsible: fd.get('responsible'), notes: fd.get('notes'), items });
+        visitModal.classList.remove('open');
+        showToast('Visita registrada y enviada a Finanzas');
+        router();
+      });
+    }
+    document.querySelectorAll('.del-visit-btn').forEach(b => b.addEventListener('click', () => {
+      if (!confirm('¿Eliminar esta visita? También se eliminarán los ingresos que generó en Finanzas.')) return;
+      deleteVisit(b.dataset.id);
+      showToast('Visita eliminada');
+      router();
+    }));
 
     const dentogramModal = document.getElementById('dentogramModal');
     const dentogramFrame = document.getElementById('dentogramFrame');
@@ -1985,7 +2167,7 @@ function attachViewHandlers(parts) {
       const settings = getSettings();
       if (typeSelect.value === 'ingreso') {
         categoryLabel.textContent = 'Tratamiento';
-        categorySelect.innerHTML = '<option value="">Selecciona...</option>' + settings.treatments.filter(t => t.active).map(t => `<option value="${t.id}" data-price="${t.price || 0}">${escapeHtml(t.name)}</option>`).join('');
+        categorySelect.innerHTML = '<option value="">Selecciona...</option><option value="__payroll">Pago de nómina / comisiones</option>' + settings.fixedCosts.filter(c => c.active !== false).map(t => `<option value="${t.id}" data-price="${t.price || 0}">${escapeHtml(t.name)}</option>`).join('');
       } else {
         categoryLabel.textContent = 'Concepto de gasto';
         categorySelect.innerHTML = '<option value="">Selecciona...</option>' + settings.fixedCosts.filter(c => c.active !== false).map(c => `<option value="${c.id}" data-price="${c.amount || 0}">${escapeHtml(c.name)}</option>`).join('');
@@ -2002,6 +2184,7 @@ function attachViewHandlers(parts) {
 
     document.querySelectorAll('.pay-staff-btn').forEach(b => b.addEventListener('click', () => {
       modal.classList.add('open');
+      categorySelect.value = '__payroll';
       typeSelect.value = 'gasto';
       refreshCategoryOptions();
       amountInput.value = b.dataset.amount;
@@ -2043,8 +2226,8 @@ function attachViewHandlers(parts) {
       if (!payType) return;
       const salaryField = document.getElementById('staffSalaryField');
       const commissionField = document.getElementById('staffCommissionField');
-      salaryField.style.display = payType.value === 'fijo' ? '' : 'none';
-      commissionField.style.display = payType.value === 'comision' ? '' : 'none';
+      salaryField.style.display = (payType.value === 'fijo' || payType.value === 'mixto') ? '' : 'none';
+      commissionField.style.display = (payType.value === 'comision' || payType.value === 'mixto') ? '' : 'none';
     }
     const staffPayTypeSelect = document.getElementById('staffPayType');
     if (staffPayTypeSelect) staffPayTypeSelect.addEventListener('change', toggleStaffPayFields);
