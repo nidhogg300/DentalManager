@@ -1567,7 +1567,9 @@ function renderFinance() {
     const c = comisiones.find(x => x.staffId === s.id) || { comision: 0, lines: [] };
     const generado = ingresos.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
     const pagado = pagosNomina.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
-    const extra = Math.max(0, pagado - (salaryCfg + c.comision));
+    
+    // Todos los pagos manuales registrados en el mes se toman como valor extra/adicional
+    const extra = pagado; 
     const salary = salaryCfg + extra;
     const total = salary + c.comision;
     const tipo = s.payType === 'mixto' ? 'Salario fijo + comisión' : s.payType === 'comision' ? 'Solo comisión' : 'Salario fijo mensual';
