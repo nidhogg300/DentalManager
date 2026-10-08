@@ -649,6 +649,10 @@ function setupChrome() {
   document.getElementById('menuBtn').addEventListener('click', openSidebar);
   document.getElementById('sidebarClose').addEventListener('click', closeSidebar);
   document.getElementById('sidebarOverlay').addEventListener('click', closeSidebar);
+  document.addEventListener('wheel', () => {
+  const el = document.activeElement;
+  if (el && el.tagName === 'INPUT' && el.type === 'number') el.blur();
+  }, { passive: true });
 
   const navFin = document.getElementById('navFinanzas');
   const lockIcon = document.getElementById('financeLockIcon');
@@ -822,7 +826,22 @@ function metricCard(label, value, color) {
     <div class="metric-value">${value}<span class="metric-dot" style="background:${dotColors[color] || dotColors.blue}"></span></div>
   </div>`;
 }
-function donutChart(segments, total) {
+// $8.920.394 -> "$8,9 M" · $450.000 -> "$450 mil" (para el centro del pastel, que es pequeño)
+function formatCOPCompact(n) {
+  const v = Math.round(n || 0);
+  const abs = Math.abs(v);
+  const sign = v < 0 ? '-' : '';
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toLocaleString('es-CO', { maximumFractionDigits: 1 })} M`;
+  if (abs >= 1e3) return `${sign}$${Math.round(abs / 1e3).toLocaleString('es-CO')} mil`;
+  return `${sign}$${abs}`;
+}
+
+function donutChart(segments, total, opts = {}) {
+  const money = !!opts.money;
+  const fmt = v => money ? formatCOP(v) : v;
+  const centerValue = opts.centerValue !== undefined ? opts.centerValue : total;
+  const centerText = money ? formatCOPCompact(centerValue) : centerValue;
+  const centerLabel = opts.centerLabel || 'Total';
   let acc = 0;
   const stops = segments.map(s => {
     const pct = total ? (s.value / total) * 100 : 0;
@@ -831,9 +850,9 @@ function donutChart(segments, total) {
   }).join(', ');
   const bg = total ? `conic-gradient(${stops})` : '#eef1f5';
   return `<div class="donut-wrap">
-    <div class="donut" style="background:${bg}"><div class="donut-center"><strong>${total}</strong><span>Total</span></div></div>
+    <div class="donut" style="background:${bg}"><div class="donut-center"><strong>${centerText}</strong><span>${escapeHtml(centerLabel)}</span></div></div>
     <div class="legend">
-      ${segments.map(s => `<div class="legend-item"><span class="lg-left"><i class="legend-dot" style="background:${s.color}"></i>${escapeHtml(s.label)}</span><strong>${s.value}</strong></div>`).join('')}
+      ${segments.map(s => `<div class="legend-item"><span class="lg-left"><i class="legend-dot" style="background:${s.color}"></i>${escapeHtml(s.label)}</span><strong>${fmt(s.value)}</strong></div>`).join('')}
     </div>
   </div>`;
 }
@@ -1373,7 +1392,10 @@ function monthLabel(ym) {
   const [y, m] = ym.split('-').map(Number);
   return new Date(y, m - 1, 1).toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
 }
-function fixedCostLabel(id) { const c = getSettings().fixedCosts.find(x => x.id === id); return c ? c.name : (id || 'Gasto'); }
+function fixedCostLabel(id) {
+  if (id === '__payroll') return 'Pago de nómina / comisiones';
+  const c = getSettings().fixedCosts.find(x => x.id === id); return c ? c.name : (id || 'Gasto');
+}
 function financeTxCategoryLabel(tx) {
   return tx.type === 'ingreso' ? treatmentLabel(tx.category) : fixedCostLabel(tx.category);
 }
@@ -1397,19 +1419,37 @@ function renderFinance() {
   const month = financeMonth;
   const txMonth = getFinanceTx().filter(t => (t.date || '').slice(0, 7) === month);
   const ingresos = txMonth.filter(t => t.type === 'ingreso');
-  const gastosVariables = txMonth.filter(t => t.type === 'gasto');
+  const gastosVariables = txMonth.filter(t => t.type === 'gasto' && t.category !== '__payroll');
+  const pagosNomina = txMonth.filter(t => t.type === 'gasto' && t.category === '__payroll');
   const fixedActive = settings.fixedCosts.filter(c => c.active !== false && c.fixed);
   const totalIngresos = ingresos.reduce((s, t) => s + t.amount, 0);
-  const totalFijos = fixedActive.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  // Si ya registraste un movimiento para un costo fijo este mes, ese movimiento reemplaza
+  // al valor automático (así no se cuenta dos veces).
+  const registeredCats = new Set(gastosVariables.map(t => t.category));
+  const fixedPending = fixedActive.filter(c => !registeredCats.has(c.id));
+  const totalFijos = fixedPending.reduce((s, c) => s + (Number(c.amount) || 0), 0);
   const totalGastosManual = gastosVariables.reduce((s, t) => s + t.amount, 0);
 
   const staffList = settings.staff.filter(s => s.active !== false);
   const nominaFija = staffList.filter(s => s.payType === 'fijo')
     .reduce((sum, s) => sum + (Number(s.monthlySalary) || 0), 0);
   const comisiones = staffList.filter(s => s.payType === 'comision').map(s => {
-    const produccion = ingresos.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
-    const comision = produccion * ((Number(s.commissionPercent) || 0) / 100);
-    return { staffId: s.id, nombre: s.name, produccion, comision };
+    const rates = s.commissionByTreatment || {};
+    const defaultPct = Number(s.commissionPercent) || 0;
+    const byTreat = {};
+    ingresos.filter(t => t.responsible === s.id).forEach(t => {
+      const key = t.category || '';
+      const pct = rates[key] !== undefined ? Number(rates[key]) : defaultPct;
+      if (!byTreat[key]) byTreat[key] = { produccion: 0, pct, comision: 0 };
+      byTreat[key].produccion += t.amount;
+      byTreat[key].comision += t.amount * pct / 100;
+    });
+    const lines = Object.entries(byTreat).map(([treatmentId, v]) => ({ treatmentId, ...v }));
+    return {
+      staffId: s.id, nombre: s.name, lines,
+      produccion: lines.reduce((sum, l) => sum + l.produccion, 0),
+      comision: lines.reduce((sum, l) => sum + l.comision, 0),
+    };
   });
   const totalComisiones = comisiones.reduce((sum, c) => sum + c.comision, 0);
 
@@ -1435,7 +1475,7 @@ function renderFinance() {
   // --- Desglose "¿en qué se va la plata?" ---
   const gastoCategorias = {};
   gastosVariables.forEach(t => { const label = fixedCostLabel(t.category); gastoCategorias[label] = (gastoCategorias[label] || 0) + t.amount; });
-  fixedActive.forEach(c => { gastoCategorias[c.name] = (gastoCategorias[c.name] || 0) + (Number(c.amount) || 0); });
+  fixedPending.forEach(c => { gastoCategorias[c.name] = (gastoCategorias[c.name] || 0) + (Number(c.amount) || 0); });
   if (nominaFija) gastoCategorias['Nómina fija'] = (gastoCategorias['Nómina fija'] || 0) + nominaFija;
   if (totalComisiones) gastoCategorias['Comisiones'] = (gastoCategorias['Comisiones'] || 0) + totalComisiones;
   const gastoColors = ['var(--color-accent-red)', 'var(--color-primary)', 'var(--color-accent-yellow)', 'var(--color-accent-purple)', 'var(--color-text-faint)', 'var(--color-accent-green)'];
@@ -1482,10 +1522,17 @@ function renderFinance() {
         <div class="section-card-head"><h3>Nómina y Comisiones — ${monthLabel(month)}</h3></div>
         <div class="section-card-body">
           ${staffList.length ? staffList.map(s => {
+            const pagado = pagosNomina.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
+            const pagadoTxt = pagado > 0 ? `<span style="display:block;font-size:12px;color:var(--color-accent-green);">Pagado este mes: ${formatCOP(pagado)}</span>` : '';
             if (s.payType === 'comision') {
-              const c = comisiones.find(x => x.staffId === s.id) || { produccion: 0, comision: 0 };
+              const c = comisiones.find(x => x.staffId === s.id) || { produccion: 0, comision: 0, lines: [] };
               return `<div class="payroll-row">
-                <div><strong>${escapeHtml(s.name)}</strong><span class="text-faint" style="display:block;font-size:12px;">Comisión ${s.commissionPercent || 0}% sobre ${formatCOP(c.produccion)} producidos</span></div>
+                <div>
+                  <strong>${escapeHtml(s.name)}</strong>
+                  <span class="text-faint" style="display:block;font-size:12px;">Producido: ${formatCOP(c.produccion)}</span>
+                  ${c.lines.map(l => `<span class="text-faint" style="display:block;font-size:11.5px;">· ${l.treatmentId ? escapeHtml(treatmentLabel(l.treatmentId)) : 'Sin tratamiento'}: ${formatCOP(l.produccion)} × ${l.pct}% = ${formatCOP(l.comision)}</span>`).join('')}
+                  ${pagadoTxt}
+                </div>
                 <div style="display:flex;align-items:center;gap:10px;">
                   <strong>${formatCOP(c.comision)}</strong>
                   <button class="btn btn-secondary btn-sm pay-staff-btn" data-id="${s.id}" data-amount="${Math.round(c.comision)}" data-concept="Comisión ${monthLabel(month)} — ${escapeHtml(s.name)}">Registrar pago</button>
@@ -1493,7 +1540,11 @@ function renderFinance() {
               </div>`;
             }
             return `<div class="payroll-row">
-              <div><strong>${escapeHtml(s.name)}</strong><span class="text-faint" style="display:block;font-size:12px;">Salario fijo mensual</span></div>
+              <div>
+                <strong>${escapeHtml(s.name)}</strong>
+                <span class="text-faint" style="display:block;font-size:12px;">Salario fijo mensual</span>
+                ${pagadoTxt}
+              </div>
               <div style="display:flex;align-items:center;gap:10px;">
                 <strong>${formatCOP(s.monthlySalary || 0)}</strong>
                 <button class="btn btn-secondary btn-sm pay-staff-btn" data-id="${s.id}" data-amount="${Math.round(s.monthlySalary || 0)}" data-concept="Nómina ${monthLabel(month)} — ${escapeHtml(s.name)}">Registrar pago</button>
@@ -1534,11 +1585,11 @@ function renderFinance() {
         ${donutChart([
           { label: 'Ingresos', value: totalIngresos, color: 'var(--color-accent-green)' },
           { label: 'Gastos', value: totalGastos, color: 'var(--color-accent-red)' },
-        ], totalIngresos + totalGastos || 1)}
+        ], totalIngresos + totalGastos || 1, { money: true, centerValue: utilidad, centerLabel: 'Utilidad' })}
       </div>
       <div class="card" style="margin-bottom:20px;">
         <h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">¿En qué se va la plata?</h3>
-        ${gastoSegments.length ? donutChart(gastoSegments, gastoSegments.reduce((s, g) => s + g.value, 0) || 1) : emptyStateHtml('Sin gastos registrados este mes', '')}
+        ${gastoSegments.length ? donutChart(gastoSegments, gastoSegments.reduce((s, g) => s + g.value, 0) || 1, { money: true, centerValue: totalGastos, centerLabel: 'Gastos' }) : emptyStateHtml('Sin gastos registrados este mes', '')}
       </div>
       <div class="section-card">
         <div class="section-card-head">
@@ -1726,7 +1777,7 @@ function renderSettings() {
             ${settingsActiveTab === 'statuses' ? badge(item.name, item.color) : isAccess ? `<strong>${escapeHtml(item.email)}</strong>` : `<strong>${escapeHtml(item.name)}</strong>`}
             ${isTreatments ? `<span class="settings-catalog-desc">Precio actual: ${formatCOP(item.price)}</span>` : ''}
             ${isCosts ? `<span class="settings-catalog-desc">${item.fixed ? 'Fijo mensual' : 'Variable'} · ${formatCOP(item.amount)}</span>` : ''}
-            ${isStaff ? `<span class="settings-catalog-desc">${item.payType === 'comision' ? `Comisión: ${item.commissionPercent || 0}% de lo que produce` : `Salario fijo: ${formatCOP(item.monthlySalary || 0)}/mes`}</span>` : ''}
+            ${isStaff ? `<span class="settings-catalog-desc">${item.payType === 'comision' ? `Comisión por tratamiento (${Object.keys(item.commissionByTreatment || {}).length} definidos · por defecto ${item.commissionPercent || 0}%)` : `Salario fijo: ${formatCOP(item.monthlySalary || 0)}/mes`}</span>` : ''}
             ${item.desc && !isAccess ? `<span class="settings-catalog-desc">${escapeHtml(item.desc)}</span>` : ''}
             ${item.active === false ? `<span class="text-faint" style="font-size:11.5px;">Deshabilitado</span>` : ''}
           </div>
@@ -1763,7 +1814,13 @@ function renderSettings() {
               </select>
             </div>
             <div class="field mt-2" id="staffSalaryField"><label>Salario fijo mensual (COP)</label><input type="number" min="0" step="1000" name="monthlySalary" value="0"></div>
-            <div class="field mt-2" id="staffCommissionField"><label>% de comisión sobre tratamientos realizados</label><input type="number" min="0" max="100" step="1" name="commissionPercent" value="0"></div>
+            <div id="staffCommissionField">
+              <div class="field mt-2"><label>% por defecto (para tratamientos sin % propio)</label><input type="number" min="0" max="100" step="0.5" name="commissionPercent" value="0"></div>
+              <p class="text-faint" style="font-size:12px;margin:12px 0 6px;">% de comisión por tratamiento (vacío = usa el % por defecto):</p>
+              <div class="comm-grid">
+                ${settings.treatments.filter(t => t.active !== false).map(t => `<label class="comm-item"><span>${escapeHtml(t.name)}</span><input type="number" min="0" max="100" step="0.5" name="comm_${t.id}" placeholder="—"></label>`).join('')}
+              </div>
+            </div>
           ` : ''}
         `}
         <div class="form-actions">
@@ -2016,6 +2073,11 @@ function attachViewHandlers(parts) {
           document.querySelector('#optionForm [name=payType]').value = item.payType || 'fijo';
           document.querySelector('#optionForm [name=monthlySalary]').value = item.monthlySalary || 0;
           document.querySelector('#optionForm [name=commissionPercent]').value = item.commissionPercent || 0;
+          const rates = item.commissionByTreatment || {};
+          settings.treatments.forEach(t => {
+            const inp = document.querySelector(`#optionForm [name="comm_${t.id}"]`);
+            if (inp) inp.value = rates[t.id] ?? '';
+          });
           toggleStaffPayFields();
         }
       }
@@ -2051,6 +2113,11 @@ function attachViewHandlers(parts) {
           payload.payType = data.payType || 'fijo';
           payload.monthlySalary = Number(data.monthlySalary) || 0;
           payload.commissionPercent = Number(data.commissionPercent) || 0;
+          const byTreatment = {};
+          Object.keys(data).forEach(k => {
+            if (k.startsWith('comm_') && data[k] !== '') byTreatment[k.slice(5)] = Number(data[k]) || 0;
+          });
+          payload.commissionByTreatment = byTreatment;
         }
       }
       if (data.optionId) {
