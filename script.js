@@ -1559,21 +1559,29 @@ function renderFinance() {
   });
   const totalComisiones = comisiones.reduce((sum, c) => sum + c.comision, 0);
 
-  const totalGastos = totalGastosManual + totalFijos + nominaFija + totalComisiones;
-  const utilidad = totalIngresos - totalGastos;
-
-  // Filas de la tabla de nómina: salario fijo + comisiones por persona.
+  // Nómina por persona = salario fijo configurado + comisiones. Si ya se registraron pagos
+  // ("Registrar pago") por MÁS de eso (p. ej. el miembro no tiene salario configurado), lo
+  // pagado de más cuenta como salario: así ningún pago de nómina queda fuera de los gastos.
   const payrollRows = staffList.map(s => {
-    const salary = hasSalary(s) ? (Number(s.monthlySalary) || 0) : 0;
+    const salaryCfg = hasSalary(s) ? (Number(s.monthlySalary) || 0) : 0;
     const c = comisiones.find(x => x.staffId === s.id) || { comision: 0, lines: [] };
     const generado = ingresos.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
-    const total = salary + c.comision;
     const pagado = pagosNomina.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
+    const extra = Math.max(0, pagado - (salaryCfg + c.comision));
+    const salary = salaryCfg + extra;
+    const total = salary + c.comision;
     const tipo = s.payType === 'mixto' ? 'Salario fijo + comisión' : s.payType === 'comision' ? 'Solo comisión' : 'Salario fijo mensual';
-    return { s, tipo, salary, lines: c.lines, comision: c.comision, generado, total, pagado, pendiente: Math.max(0, total - pagado) };
+    return { s, tipo, salary, extra, lines: c.lines, comision: c.comision, generado, total, pagado, pendiente: Math.max(0, total - pagado) };
   });
-  const sumPagado = payrollRows.reduce((a, r) => a + r.pagado, 0);
+  // Pagos de nómina sin miembro asignado (o de alguien que ya no está activo)
+  const staffIds = new Set(staffList.map(s => s.id));
+  const pagosSinAsignar = pagosNomina.filter(t => !staffIds.has(t.responsible)).reduce((sum, t) => sum + t.amount, 0);
+  const nominaGasto = nominaFija + payrollRows.reduce((a, r) => a + r.extra, 0) + pagosSinAsignar;
+  const sumPagado = payrollRows.reduce((a, r) => a + r.pagado, 0) + pagosSinAsignar;
   const sumPendiente = payrollRows.reduce((a, r) => a + r.pendiente, 0);
+
+  const totalGastos = totalGastosManual + totalFijos + nominaGasto + totalComisiones;
+  const utilidad = totalIngresos - totalGastos;
 
   // --- Barra de margen de utilidad ---
   let marginPct = totalIngresos > 0 ? Math.round((utilidad / totalIngresos) * 100) : null;
@@ -1595,7 +1603,7 @@ function renderFinance() {
   const gastoCategorias = {};
   gastosVariables.forEach(t => { const label = fixedCostLabel(t.category); gastoCategorias[label] = (gastoCategorias[label] || 0) + t.amount; });
   fixedPending.forEach(c => { gastoCategorias[c.name] = (gastoCategorias[c.name] || 0) + (Number(c.amount) || 0); });
-  if (nominaFija) gastoCategorias['Nómina fija'] = (gastoCategorias['Nómina fija'] || 0) + nominaFija;
+  if (nominaGasto) gastoCategorias['Nómina fija'] = (gastoCategorias['Nómina fija'] || 0) + nominaGasto;
   if (totalComisiones) gastoCategorias['Comisiones'] = (gastoCategorias['Comisiones'] || 0) + totalComisiones;
   const gastoColors = ['var(--color-accent-red)', 'var(--color-primary)', 'var(--color-accent-yellow)', 'var(--color-accent-purple)', 'var(--color-text-faint)', 'var(--color-accent-green)'];
   // Máximo 6 porciones. Nómina fija y Comisiones SIEMPRE se muestran; lo demás que no quepa
@@ -1639,7 +1647,7 @@ function renderFinance() {
   <div class="grid-metrics">
     ${metricCard('Ingresos del mes', formatCOP(totalIngresos), 'green')}
     ${metricCard('Gastos del mes', formatCOP(totalGastos), 'red')}
-    ${metricCard('Nómina + Comisiones', formatCOP(nominaFija + totalComisiones), 'purple')}
+    ${metricCard('Nómina + Comisiones', formatCOP(nominaGasto + totalComisiones), 'purple')}
     ${metricCard('Costos fijos incluidos', formatCOP(totalFijos), 'blue')}
     ${metricCard('Utilidad del mes', formatCOP(utilidad), utilidad >= 0 ? 'green' : 'red')}
   </div>
@@ -1664,20 +1672,24 @@ function renderFinance() {
                     <span class="text-faint" style="display:block;font-size:12px;">${r.tipo} · Generó: ${formatCOP(r.generado)}</span>
                     ${r.lines.map(l => `<span class="text-faint" style="display:block;font-size:11.5px;">· ${l.treatmentId ? escapeHtml(treatmentLabel(l.treatmentId)) : 'Sin tratamiento'}: ${formatCOP(l.produccion)} × ${l.pct}% = ${formatCOP(l.comision)}</span>`).join('')}
                   </td>
-                  <td>${hasSalary(r.s) ? formatCOP(r.salary) : '—'}</td>
+                  <td>${(hasSalary(r.s) || r.extra) ? formatCOP(r.salary) : '—'}${r.extra ? `<span class="text-faint" style="display:block;font-size:11px;">incluye ${formatCOP(r.extra)} pagados sin salario configurado</span>` : ''}</td>
                   <td>${hasCommission(r.s) ? formatCOP(r.comision) : '—'}</td>
                   <td><strong>${formatCOP(r.total)}</strong></td>
                   <td>${r.pagado ? formatCOP(r.pagado) : '—'}</td>
                   <td>${formatCOP(r.pendiente)}</td>
                   <td><button class="btn btn-secondary btn-sm pay-staff-btn" data-id="${r.s.id}" data-amount="${Math.round(r.pendiente)}" data-concept="Nómina ${monthLabel(month)} — ${escapeHtml(r.s.name)}">Registrar pago</button></td>
-                </tr>`).join('') : `<tr><td colspan="7">${emptyStateHtml('Sin personal configurado', 'Agrega tu equipo en Configuración → Miembros del equipo, indicando si cobra fijo, por comisión o ambos.')}</td></tr>`}
+                </tr>`).join('') + (pagosSinAsignar ? `
+                <tr>
+                  <td><strong>Otros pagos de nómina</strong><span class="text-faint" style="display:block;font-size:12px;">Pagos sin miembro del equipo asignado</span></td>
+                  <td>${formatCOP(pagosSinAsignar)}</td><td>—</td><td><strong>${formatCOP(pagosSinAsignar)}</strong></td><td>${formatCOP(pagosSinAsignar)}</td><td>${formatCOP(0)}</td><td></td>
+                </tr>` : '') : `<tr><td colspan="7">${emptyStateHtml('Sin personal configurado', 'Agrega tu equipo en Configuración → Miembros del equipo, indicando si cobra fijo, por comisión o ambos.')}</td></tr>`}
             </tbody>
             ${payrollRows.length ? `<tfoot>
               <tr style="font-weight:700;border-top:2px solid var(--color-border);">
                 <td>Total del mes</td>
-                <td>${formatCOP(nominaFija)}</td>
+                <td>${formatCOP(nominaGasto)}</td>
                 <td>${formatCOP(totalComisiones)}</td>
-                <td>${formatCOP(nominaFija + totalComisiones)}</td>
+                <td>${formatCOP(nominaGasto + totalComisiones)}</td>
                 <td>${formatCOP(sumPagado)}</td>
                 <td>${formatCOP(sumPendiente)}</td>
                 <td></td>
