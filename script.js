@@ -1598,7 +1598,21 @@ function renderFinance() {
   if (nominaFija) gastoCategorias['Nómina fija'] = (gastoCategorias['Nómina fija'] || 0) + nominaFija;
   if (totalComisiones) gastoCategorias['Comisiones'] = (gastoCategorias['Comisiones'] || 0) + totalComisiones;
   const gastoColors = ['var(--color-accent-red)', 'var(--color-primary)', 'var(--color-accent-yellow)', 'var(--color-accent-purple)', 'var(--color-text-faint)', 'var(--color-accent-green)'];
-  const gastoSegments = Object.entries(gastoCategorias).sort((a, b) => b[1] - a[1]).slice(0, 6)
+  // Máximo 6 porciones. Nómina fija y Comisiones SIEMPRE se muestran; lo demás que no quepa
+  // se agrupa en "Otros" para que la gráfica siempre sume el total de gastos del mes.
+  const MAX_GASTO_SEGMENTS = 6;
+  const gastoSorted = Object.entries(gastoCategorias).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  let gastoEntries = gastoSorted;
+  if (gastoSorted.length > MAX_GASTO_SEGMENTS) {
+    const isPayroll = ([label]) => label === 'Nómina fija' || label === 'Comisiones';
+    const payrollEntries = gastoSorted.filter(isPayroll);
+    const otherEntries = gastoSorted.filter(e => !isPayroll(e));
+    const keep = otherEntries.slice(0, MAX_GASTO_SEGMENTS - 1 - payrollEntries.length);
+    const othersTotal = otherEntries.slice(keep.length).reduce((sum, [, v]) => sum + v, 0);
+    gastoEntries = [...payrollEntries, ...keep, ...(othersTotal ? [['Otros', othersTotal]] : [])]
+      .sort((a, b) => b[1] - a[1]);
+  }
+  const gastoSegments = gastoEntries
     .map(([label, value], i) => ({ label, value, color: gastoColors[i % gastoColors.length] }));
 
   return `
