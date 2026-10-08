@@ -387,11 +387,6 @@ function deleteFinanceTx(id) {
     .then(({ error }) => { if (error) reportSyncError('eliminar movimiento financiero', error); });
 }
 // --- Visitas (procedimientos realizados a cada paciente) ---
-function staffCommissionPct(staff, treatmentId) {
-  if (!staff || (staff.payType !== 'comision' && staff.payType !== 'mixto')) return 0;
-  const rates = staff.commissionByTreatment || {};
-  return rates[treatmentId] !== undefined ? Number(rates[treatmentId]) : (Number(staff.commissionPercent) || 0);
-}
 function getVisits() { return CACHE.visits; }
 function getVisitsByPatient(patientId) {
   return getVisits().filter(v => v.patientId === patientId)
@@ -1060,7 +1055,6 @@ function renderPatientProfile(id) {
   }
   const followUps = getFollowUpsByPatient(patient.id);
   const visits = getVisitsByPatient(patient.id);
-  const canSeeMoney = isFinanceAuthorized();
 
   return `
   <div class="profile-head">
@@ -1084,7 +1078,7 @@ function renderPatientProfile(id) {
           <button class="btn btn-primary btn-sm" id="addVisitBtn">+ Registrar visita</button>
         </div>
         <div class="section-card-body">
-          ${visits.length ? visits.map(v => visitCardHtml(v, canSeeMoney)).join('') : emptyStateHtml('Sin visitas registradas', 'Registra la primera visita para dejar el reporte del procedimiento y calcular lo que corresponde a cada doctor.')}
+          ${visits.length ? visits.map(v => visitCardHtml(v)).join('') : emptyStateHtml('Sin visitas registradas', 'Registra la primera visita para dejar el reporte del procedimiento y calcular lo que corresponde a cada doctor.')}
         </div>
       </div>
 
@@ -1161,7 +1155,7 @@ function renderPatientProfile(id) {
       <form id="visitForm">
         <div class="field"><label>Fecha *</label><input type="date" name="date" required value="${todayISO()}"></div>
         <div class="field mt-2"><label>Doctor(a) que atendió *</label><select name="responsible" id="visitDoctor" required><option value="">Selecciona...</option>${optionsFor(getSettings().staff, patient.responsible)}</select></div>
-        <p class="text-faint" style="font-size:12px;margin:14px 0 6px;">Procedimientos realizados y valor cobrado</p>
+        <p class="text-faint" style="font-size:12px;margin:14px 0 6px;">Procedimientos realizados y valor a cobrar (si lo dejas vacío se usa el precio de Configuración)</p>
         <div id="visitItems"></div>
         <button type="button" class="btn btn-secondary btn-sm" id="addVisitItemBtn">+ Agregar otro procedimiento</button>
         <div class="field mt-2"><label>Reporte del procedimiento</label><textarea name="notes" placeholder="Qué se hizo, hallazgos, indicaciones..."></textarea></div>
@@ -1182,20 +1176,18 @@ function renderPatientProfile(id) {
   </div>
   `;
 }
-function visitCardHtml(v, canSeeMoney) {
-  const staff = getSettings().staff.find(s => s.id === v.responsible);
-  const share = (v.items || []).reduce((s, i) => s + (Number(i.paid) || 0) * staffCommissionPct(staff, i.treatmentId) / 100, 0);
+function visitCardHtml(v) {
+  // Solo lo que se le cobra al paciente. Nada de comisiones ni pagos al equipo.
   return `<div style="padding:12px 0;border-bottom:1px solid var(--color-border);">
     <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;">
       <div><strong>${formatDate(v.date)}</strong><span class="text-faint" style="font-size:12.5px;"> · ${escapeHtml(staffLabel(v.responsible))}</span></div>
-      ${canSeeMoney ? `<strong>${formatCOP(visitTotal(v))}</strong>` : ''}
+      <strong>${formatCOP(visitTotal(v))}</strong>
     </div>
     <ul style="margin:6px 0 0 18px;font-size:13px;">
-      ${(v.items || []).map(i => `<li>${escapeHtml(treatmentLabel(i.treatmentId))}${canSeeMoney ? ` — ${formatCOP(i.paid)}` : ''}</li>`).join('')}
+      ${(v.items || []).map(i => `<li>${escapeHtml(treatmentLabel(i.treatmentId))} — ${formatCOP(i.paid)}</li>`).join('')}
     </ul>
     ${v.notes ? `<p class="timeline-note">${escapeHtml(v.notes)}</p>` : ''}
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">
-      <span class="text-faint" style="font-size:12px;">${canSeeMoney && share > 0 ? `Le corresponde a ${escapeHtml(staffLabel(v.responsible))}: ${formatCOP(share)}` : ''}</span>
+    <div style="display:flex;justify-content:flex-end;margin-top:6px;">
       <button class="action-link muted del-visit-btn" data-id="${v.id}">Eliminar</button>
     </div>
   </div>`;
@@ -1570,6 +1562,19 @@ function renderFinance() {
   const totalGastos = totalGastosManual + totalFijos + nominaFija + totalComisiones;
   const utilidad = totalIngresos - totalGastos;
 
+  // Filas de la tabla de nómina: salario fijo + comisiones por persona.
+  const payrollRows = staffList.map(s => {
+    const salary = hasSalary(s) ? (Number(s.monthlySalary) || 0) : 0;
+    const c = comisiones.find(x => x.staffId === s.id) || { comision: 0, lines: [] };
+    const generado = ingresos.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
+    const total = salary + c.comision;
+    const pagado = pagosNomina.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
+    const tipo = s.payType === 'mixto' ? 'Salario fijo + comisión' : s.payType === 'comision' ? 'Solo comisión' : 'Salario fijo mensual';
+    return { s, tipo, salary, lines: c.lines, comision: c.comision, generado, total, pagado, pendiente: Math.max(0, total - pagado) };
+  });
+  const sumPagado = payrollRows.reduce((a, r) => a + r.pagado, 0);
+  const sumPendiente = payrollRows.reduce((a, r) => a + r.pendiente, 0);
+
   // --- Barra de margen de utilidad ---
   let marginPct = totalIngresos > 0 ? Math.round((utilidad / totalIngresos) * 100) : null;
   let marginColor = 'var(--color-accent-red)';
@@ -1634,37 +1639,45 @@ function renderFinance() {
 
       <div class="section-card">
         <div class="section-card-head"><h3>Nómina y Comisiones — ${monthLabel(month)}</h3></div>
-        <div class="section-card-body">
-          ${staffList.length ? staffList.map(s => {
-            const salary = hasSalary(s) ? (Number(s.monthlySalary) || 0) : 0;
-            const c = comisiones.find(x => x.staffId === s.id) || { produccion: 0, comision: 0, lines: [] };
-            const generado = ingresos.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
-            const debido = salary + c.comision;
-            const pagado = pagosNomina.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
-            const pendiente = Math.max(0, debido - pagado);
-            const tipo = s.payType === 'mixto' ? 'Salario fijo + comisión' : s.payType === 'comision' ? 'Solo comisión' : 'Salario fijo mensual';
-            return `<div class="payroll-row">
-              <div>
-                <strong>${escapeHtml(s.name)}</strong>
-                <span class="text-faint" style="display:block;font-size:12px;">${tipo} · Generó en el mes: ${formatCOP(generado)}</span>
-                ${salary ? `<span class="text-faint" style="display:block;font-size:11.5px;">· Salario fijo: ${formatCOP(salary)}</span>` : ''}
-                ${c.lines.map(l => `<span class="text-faint" style="display:block;font-size:11.5px;">· ${l.treatmentId ? escapeHtml(treatmentLabel(l.treatmentId)) : 'Sin tratamiento'}: ${formatCOP(l.produccion)} × ${l.pct}% = ${formatCOP(l.comision)}</span>`).join('')}
-                ${pagado > 0 ? `<span style="display:block;font-size:12px;color:var(--color-accent-green);">Pagado este mes: ${formatCOP(pagado)}</span>` : ''}
-              </div>
-              <div style="display:flex;align-items:center;gap:10px;">
-                <div style="text-align:right;">
-                  <strong>${formatCOP(debido)}</strong>
-                  <span class="text-faint" style="display:block;font-size:11.5px;">Pendiente: ${formatCOP(pendiente)}</span>
-                </div>
-                <button class="btn btn-secondary btn-sm pay-staff-btn" data-id="${s.id}" data-amount="${Math.round(pendiente)}" data-concept="Nómina ${monthLabel(month)} — ${escapeHtml(s.name)}">Registrar pago</button>
-              </div>
-            </div>`;
-          }).join('') : emptyStateHtml('Sin personal configurado', 'Agrega tu equipo en Configuración → Miembros del equipo, indicando si cobra fijo, por comisión o ambos.')}
-          <div class="payroll-total">
-            <span>Total nómina + comisiones del mes</span>
-            <strong>${formatCOP(nominaFija + totalComisiones)}</strong>
-          </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Miembro del equipo</th><th>Salario fijo</th><th>Comisiones</th><th>Total a pagar</th><th>Pagado</th><th>Pendiente</th><th></th></tr></thead>
+            <tbody>
+              ${payrollRows.length ? payrollRows.map(r => `
+                <tr>
+                  <td>
+                    <strong>${escapeHtml(r.s.name)}</strong>
+                    <span class="text-faint" style="display:block;font-size:12px;">${r.tipo} · Generó: ${formatCOP(r.generado)}</span>
+                    ${r.lines.map(l => `<span class="text-faint" style="display:block;font-size:11.5px;">· ${l.treatmentId ? escapeHtml(treatmentLabel(l.treatmentId)) : 'Sin tratamiento'}: ${formatCOP(l.produccion)} × ${l.pct}% = ${formatCOP(l.comision)}</span>`).join('')}
+                  </td>
+                  <td>${hasSalary(r.s) ? formatCOP(r.salary) : '—'}</td>
+                  <td>${hasCommission(r.s) ? formatCOP(r.comision) : '—'}</td>
+                  <td><strong>${formatCOP(r.total)}</strong></td>
+                  <td>${r.pagado ? formatCOP(r.pagado) : '—'}</td>
+                  <td>${formatCOP(r.pendiente)}</td>
+                  <td><button class="btn btn-secondary btn-sm pay-staff-btn" data-id="${r.s.id}" data-amount="${Math.round(r.pendiente)}" data-concept="Nómina ${monthLabel(month)} — ${escapeHtml(r.s.name)}">Registrar pago</button></td>
+                </tr>`).join('') : `<tr><td colspan="7">${emptyStateHtml('Sin personal configurado', 'Agrega tu equipo en Configuración → Miembros del equipo, indicando si cobra fijo, por comisión o ambos.')}</td></tr>`}
+            </tbody>
+            ${payrollRows.length ? `<tfoot>
+              <tr style="font-weight:700;border-top:2px solid var(--color-border);">
+                <td>Total del mes</td>
+                <td>${formatCOP(nominaFija)}</td>
+                <td>${formatCOP(totalComisiones)}</td>
+                <td>${formatCOP(nominaFija + totalComisiones)}</td>
+                <td>${formatCOP(sumPagado)}</td>
+                <td>${formatCOP(sumPendiente)}</td>
+                <td></td>
+              </tr>
+            </tfoot>` : ''}
+          </table>
         </div>
+        ${pagosNomina.length ? `<div class="section-card-body">
+          <p class="text-faint" style="font-size:12px;margin:8px 0 6px;">Pagos de nómina registrados este mes</p>
+          ${pagosNomina.map(t => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:4px 0;">
+            <span>${formatDate(t.date)} · ${t.responsible ? escapeHtml(staffLabel(t.responsible)) : '—'}${t.description ? ' — ' + escapeHtml(t.description) : ''}</span>
+            <strong>${formatCOP(t.amount)}</strong>
+          </div>`).join('')}
+        </div>` : ''}
       </div>
 
       <div class="section-card" style="margin-top:20px;">
@@ -2043,32 +2056,35 @@ function attachViewHandlers(parts) {
     if (visitModal) {
       const itemsBox = document.getElementById('visitItems');
       const summary = document.getElementById('visitSummary');
-      const doctorSel = document.getElementById('visitDoctor');
       const treatOptions = '<option value="">Tratamiento...</option>' + getSettings().treatments.filter(t => t.active !== false)
         .map(t => `<option value="${t.id}" data-price="${t.price || 0}">${escapeHtml(t.name)}</option>`).join('');
 
+      // Precio por defecto del tratamiento (Configuración → Tratamientos)
+      function defaultPriceOf(sel) {
+        const o = sel.selectedOptions[0];
+        return Number(o && o.dataset.price) || 0;
+      }
+      // Valor específico escrito en la fila; si está vacío, el precio por defecto.
+      function rowAmount(row) {
+        const raw = row.querySelector('input').value;
+        return raw === '' ? defaultPriceOf(row.querySelector('select')) : (Number(raw) || 0);
+      }
       function refreshVisitSummary() {
-        if (!isFinanceAuthorized()) { summary.textContent = ''; return; }
-        const staff = getSettings().staff.find(s => s.id === doctorSel.value);
-        let total = 0, share = 0;
-        itemsBox.querySelectorAll('.visit-item-row').forEach(row => {
-          const paid = Number(row.querySelector('input').value) || 0;
-          total += paid;
-          share += paid * staffCommissionPct(staff, row.querySelector('select').value) / 100;
-        });
-        summary.textContent = `Total cobrado: ${formatCOP(total)}` + (share > 0 ? ` · Comisión para ${staff.name}: ${formatCOP(share)}` : '');
+        let total = 0;
+        itemsBox.querySelectorAll('.visit-item-row').forEach(row => { total += rowAmount(row); });
+        summary.textContent = `Total a cobrar al paciente: ${formatCOP(total)}`;
       }
       function addVisitRow() {
         const row = document.createElement('div');
         row.className = 'visit-item-row';
         row.style.cssText = 'display:grid;grid-template-columns:1fr 130px 28px;gap:8px;margin-bottom:8px;align-items:center;';
         row.innerHTML = `<select required>${treatOptions}</select>
-          <input type="number" min="0" step="1000" placeholder="Valor cobrado" required>
+          <input type="number" min="0" step="1000" placeholder="Valor a cobrar">
           <button type="button" class="action-link muted" title="Quitar" style="color:var(--color-accent-red)">✕</button>`;
         const sel = row.querySelector('select'), inp = row.querySelector('input');
         sel.addEventListener('change', () => {
-          const o = sel.selectedOptions[0];
-          if (o && o.dataset.price) inp.value = o.dataset.price; // precio del tratamiento, editable
+          // Se muestra el precio por defecto como sugerencia; el campo queda vacío hasta que se escriba otro.
+          inp.placeholder = sel.value ? `Por defecto ${formatCOP(defaultPriceOf(sel))}` : 'Valor a cobrar';
           refreshVisitSummary();
         });
         inp.addEventListener('input', refreshVisitSummary);
@@ -2086,7 +2102,6 @@ function attachViewHandlers(parts) {
         visitModal.classList.add('open');
       });
       document.getElementById('addVisitItemBtn').addEventListener('click', addVisitRow);
-      doctorSel.addEventListener('change', refreshVisitSummary);
       document.getElementById('cancelVisitModal').addEventListener('click', () => visitModal.classList.remove('open'));
 
       document.getElementById('visitForm').addEventListener('submit', (e) => {
@@ -2094,8 +2109,7 @@ function attachViewHandlers(parts) {
         const fd = new FormData(e.target);
         const items = [...itemsBox.querySelectorAll('.visit-item-row')].map(row => {
           const sel = row.querySelector('select');
-          const o = sel.selectedOptions[0];
-          return { treatmentId: sel.value, price: Number(o && o.dataset.price) || 0, paid: Number(row.querySelector('input').value) || 0 };
+          return { treatmentId: sel.value, price: defaultPriceOf(sel), paid: rowAmount(row) };
         }).filter(i => i.treatmentId);
         if (!items.length) { showToast('Agrega al menos un procedimiento'); return; }
         createVisit({ patientId: parts[1], date: fd.get('date'), responsible: fd.get('responsible'), notes: fd.get('notes'), items });
