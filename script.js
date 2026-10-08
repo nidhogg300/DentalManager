@@ -1681,7 +1681,7 @@ function renderFinance() {
                   <td>${t.responsible ? escapeHtml(staffLabel(t.responsible)) : '—'}</td>
                   <td>${t.patientId ? escapeHtml((getPatientById(t.patientId) || {}).fullName || '—') : '—'}</td>
                   <td>${formatCOP(t.amount)}</td>
-                  <td><button class="action-link muted del-finance-btn" data-id="${t.id}">Eliminar</button></td>
+                  <td>${t.visitId ? '<span class="text-faint" style="font-size:12px;">Desde visita</span>' : `<button class="action-link muted del-finance-btn" data-id="${t.id}">Eliminar</button>`}</td>
                 </tr>`).join('') : `<tr><td colspan="7">${emptyStateHtml('Sin movimientos este mes', 'Usa "+ Registrar movimiento" para agregar ingresos o gastos.')}</td></tr>`}
             </tbody>
           </table>
@@ -2167,10 +2167,10 @@ function attachViewHandlers(parts) {
       const settings = getSettings();
       if (typeSelect.value === 'ingreso') {
         categoryLabel.textContent = 'Tratamiento';
-        categorySelect.innerHTML = '<option value="">Selecciona...</option><option value="__payroll">Pago de nómina / comisiones</option>' + settings.fixedCosts.filter(c => c.active !== false).map(t => `<option value="${t.id}" data-price="${t.price || 0}">${escapeHtml(t.name)}</option>`).join('');
+        categorySelect.innerHTML = '<option value="">Selecciona...</option>' + settings.treatments.filter(t => t.active).map(t => `<option value="${t.id}" data-price="${t.price || 0}">${escapeHtml(t.name)}</option>`).join('');
       } else {
         categoryLabel.textContent = 'Concepto de gasto';
-        categorySelect.innerHTML = '<option value="">Selecciona...</option>' + settings.fixedCosts.filter(c => c.active !== false).map(c => `<option value="${c.id}" data-price="${c.amount || 0}">${escapeHtml(c.name)}</option>`).join('');
+        categorySelect.innerHTML = '<option value="">Selecciona...</option><option value="__payroll">Pago de nómina / comisiones</option>' + settings.fixedCosts.filter(c => c.active !== false).map(c => `<option value="${c.id}" data-price="${c.amount || 0}">${escapeHtml(c.name)}</option>`).join('');
       }
     }
     if (typeSelect) typeSelect.addEventListener('change', refreshCategoryOptions);
@@ -2184,9 +2184,9 @@ function attachViewHandlers(parts) {
 
     document.querySelectorAll('.pay-staff-btn').forEach(b => b.addEventListener('click', () => {
       modal.classList.add('open');
-      categorySelect.value = '__payroll';
       typeSelect.value = 'gasto';
       refreshCategoryOptions();
+      categorySelect.value = '__payroll';
       amountInput.value = b.dataset.amount;
       const respSelect = document.querySelector('#financeTxForm [name=responsible]');
       if (respSelect) respSelect.value = b.dataset.id;
