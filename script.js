@@ -1181,7 +1181,7 @@ function renderPatientProfile(id) {
           <div class="info-row"><span class="info-label">Tipo de paciente</span><span class="info-value"><select id="patientTypeQuick" class="field-select" style="max-width:170px;">${optionsFor(getSettings().patientTypes, patient.patientType || 'normal')}</select></span></div>
           <div class="info-row"><span class="info-label">Tratamientos / Intereses</span><span class="info-value">${escapeHtml(treatmentLabels(patient.treatment))}</span></div>
           <div class="info-row"><span class="info-label">Última Visita</span><span class="info-value">${patient.lastVisit ? formatDate(patient.lastVisit) : '—'}</span></div>
-        </div>if (route === 'pacientes' && parts[1] && parts[1] !== 'nuevo' && !parts[2]) {
+        </div>
       </div>
       <div class="section-card">
         <div class="section-card-head"><h3 style="font-size:13px;">Notas generales de gestión</h3></div>
