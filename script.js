@@ -68,6 +68,11 @@ const DEFAULT_SETTINGS = {
     { id: 'o8', name: 'Paciente existente', desc: 'Contacto previo en la clínica', active: true },
     { id: 'o9', name: 'Otro', desc: 'Origen no listado', active: true },
   ],
+  patientTypes: [
+    { id: 'normal', name: 'Normal', desc: 'Tarifa estándar', active: true },
+    { id: 'convenio', name: 'Convenio', desc: 'Pacientes con convenio institucional', active: true },
+    { id: 'extranjero', name: 'Extranjero', desc: 'Pacientes del exterior', active: true },
+  ],
   taskTypes: [
     { id: 'k1', name: 'Mensaje de bienvenida', desc: '', active: true },
     { id: 'k2', name: 'Entrega de kit', desc: '', active: true },
@@ -190,6 +195,7 @@ function mapPatientRow(r) {
     dentalMap: r.dental_map || null,
     phoneCode: r.phone_code || '+57',
     countryOfOrigin: r.country_of_origin || 'Colombia',
+    patientType: r.patient_type || 'normal',
     inactivityReasons: r.inactivity_reasons ? r.inactivity_reasons.split(',').filter(Boolean) : [],
   };
 }
@@ -272,6 +278,7 @@ function createPatient(data) {
     createdAt: new Date().toISOString(),
     phoneCode: data.phoneCode || '+57',
     countryOfOrigin: data.countryOfOrigin || 'Colombia',
+    patientType: data.patientType || 'normal',
     inactivityReasons: Array.isArray(data.inactivityReasons) ? data.inactivityReasons : [],
   };
   CACHE.patients.unshift(patient);
@@ -281,6 +288,7 @@ function createPatient(data) {
     responsible: patient.responsible, cedula: patient.cedula, address: patient.address,
     notes: patient.notes, created_at: patient.createdAt,
     phone_code: patient.phoneCode, country_of_origin: patient.countryOfOrigin,
+    patient_type: patient.patientType,
     inactivity_reasons: (patient.inactivityReasons || []).join(','),
   }).then(({ error }) => { if (error) reportSyncError('guardar paciente', error); });
   return patient;
@@ -310,6 +318,7 @@ function updatePatient(id, data) {
     treatment: p.treatment, responsible: p.responsible, cedula: p.cedula, address: p.address,
     notes: p.notes, last_visit: p.lastVisit,
     phone_code: p.phoneCode, country_of_origin: p.countryOfOrigin,
+    patient_type: p.patientType || 'normal',
     inactivity_reasons: (p.inactivityReasons || []).join(','),
   }).eq('id', id).then(({ error }) => { if (error) reportSyncError('actualizar paciente', error); });
   return patients[idx];
@@ -724,6 +733,20 @@ function setupChrome() {
   }
 
   setupGlobalSearch();
+
+  // Cerrar sesión: botón discreto en la esquina superior derecha de la barra superior.
+  const topbar = document.querySelector('.topbar');
+  if (topbar && !document.getElementById('logoutBtn')) {
+    const btn = el(`<button type="button" id="logoutBtn" class="btn btn-secondary btn-sm" style="margin-left:auto;white-space:nowrap;" title="${escapeHtml(CACHE.userEmail ? 'Sesión: ' + CACHE.userEmail : 'Cerrar sesión')}">Cerrar sesión</button>`);
+    topbar.appendChild(btn);
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      await supabaseClient.auth.signOut();
+      // Se recarga la página: vuelve a la pantalla de login y no queda ningún dato en memoria.
+      history.replaceState(null, '', location.pathname + location.search);
+      location.reload();
+    });
+  }
 }
 
 /* Búsqueda global: al escribir muestra un desplegable con pacientes que
@@ -1047,6 +1070,42 @@ function treatmentLabel(id) { const t = getSettings().treatments.find(x => x.id 
 function originLabel(id) { const o = getSettings().origins.find(x => x.id === id); return o ? o.name : (id || '—'); }
 function staffLabel(id) { const s = getSettings().staff.find(x => x.id === id); return s ? s.name : (id || '—'); }
 
+const BASE_PATIENT_TYPE = 'normal';
+function patientTypeLabel(id) {
+  const t = (getSettings().patientTypes || []).find(x => x.id === id);
+  return t ? t.name : 'Normal';
+}
+// Precio de un tratamiento para un tipo de paciente. "normal" (o un tipo sin precio propio)
+// usa el precio base del tratamiento.
+function priceFor(treatment, typeId) {
+  if (!treatment) return 0;
+  const byType = treatment.priceByType || {};
+  if (typeId && typeId !== BASE_PATIENT_TYPE && byType[typeId] !== undefined && byType[typeId] !== '') {
+    return Number(byType[typeId]) || 0;
+  }
+  return Number(treatment.price) || 0;
+}
+function priceForTreatmentId(treatmentId, typeId) {
+  return priceFor(getSettings().treatments.find(t => t.id === treatmentId), typeId);
+}
+// "Normal: $100.000 · Convenio: $80.000 · Extranjero: $180.000"
+function treatmentPriceSummary(item) {
+  const types = (getSettings().patientTypes || []).filter(pt => pt.active !== false);
+  const list = types.length ? types : [{ id: BASE_PATIENT_TYPE, name: 'Normal' }];
+  return list.map(pt => `${pt.name}: ${formatCOP(priceFor(item, pt.id))}`).join(' · ');
+}
+// Texto del catálogo "Miembros del equipo".
+function staffPayDescription(item) {
+  const flat = item.commissionMode === 'flat';
+  const nRates = Object.keys(flat ? (item.flatByTreatment || {}) : (item.commissionByTreatment || {})).length;
+  const comm = flat
+    ? `tarifa fija por procedimiento (${nRates} definidas · por defecto ${formatCOP(item.commissionFlat || 0)})`
+    : `comisión (${nRates} definidos · por defecto ${item.commissionPercent || 0}%)`;
+  if (item.payType === 'comision') return 'Solo ' + comm;
+  if (item.payType === 'mixto') return `Fijo ${formatCOP(item.monthlySalary || 0)}/mes + ${comm}`;
+  return `Salario fijo: ${formatCOP(item.monthlySalary || 0)}/mes`;
+}
+
 /* ============================== PATIENT PROFILE ============================== */
 function renderPatientProfile(id) {
   const patient = getPatientById(id);
@@ -1119,9 +1178,10 @@ function renderPatientProfile(id) {
         <div class="section-card-body">
           <div class="info-row"><span class="info-label">Origen de Paciente</span><span class="info-value">${escapeHtml(originLabel(patient.origin))}</span></div>
           <div class="info-row"><span class="info-label">Responsable</span><span class="info-value">${escapeHtml(staffLabel(patient.responsible))}</span></div>
+          <div class="info-row"><span class="info-label">Tipo de paciente</span><span class="info-value"><select id="patientTypeQuick" class="field-select" style="max-width:170px;">${optionsFor(getSettings().patientTypes, patient.patientType || 'normal')}</select></span></div>
           <div class="info-row"><span class="info-label">Tratamientos / Intereses</span><span class="info-value">${escapeHtml(treatmentLabels(patient.treatment))}</span></div>
           <div class="info-row"><span class="info-label">Última Visita</span><span class="info-value">${patient.lastVisit ? formatDate(patient.lastVisit) : '—'}</span></div>
-        </div>
+        </div>if (route === 'pacientes' && parts[1] && parts[1] !== 'nuevo' && !parts[2]) {
       </div>
       <div class="section-card">
         <div class="section-card-head"><h3 style="font-size:13px;">Notas generales de gestión</h3></div>
@@ -1155,6 +1215,7 @@ function renderPatientProfile(id) {
       <form id="visitForm">
         <div class="field"><label>Fecha *</label><input type="date" name="date" required value="${todayISO()}"></div>
         <div class="field mt-2"><label>Doctor(a) que atendió *</label><select name="responsible" id="visitDoctor" required><option value="">Selecciona...</option>${optionsFor(getSettings().staff, patient.responsible)}</select></div>
+        <p class="text-faint" style="font-size:12.5px;margin-top:12px;">Tarifa aplicada: <strong>${escapeHtml(patientTypeLabel(patient.patientType))}</strong> (se cambia en la ficha del paciente → Tipo de paciente)</p>
         <p class="text-faint" style="font-size:12px;margin:14px 0 6px;">Procedimientos realizados y valor a cobrar (si lo dejas vacío se usa el precio de Configuración)</p>
         <div id="visitItems"></div>
         <button type="button" class="btn btn-secondary btn-sm" id="addVisitItemBtn">+ Agregar otro procedimiento</button>
@@ -1276,6 +1337,11 @@ function renderPatientForm(editId) {
         <input type="text" name="countryOfOrigin" list="countryNameList" placeholder="Escribe para buscar..." autocomplete="off" value="${escapeHtml(patient?.countryOfOrigin || 'Colombia')}">
         <datalist id="countryNameList">${COUNTRIES.map(([name]) => `<option value="${escapeHtml(name)}">`).join('')}</datalist>
       </div>
+      <div class="field">
+        <label>Tipo de paciente *</label>
+        <select name="patientType" id="patientTypeSelect" required data-autosuggest="${isEdit ? '0' : '1'}">${optionsFor(settings.patientTypes, patient?.patientType || 'normal')}</select>
+        <span class="field-hint">Define la tarifa: el precio de cada tratamiento se fija solo según este tipo.</span>
+      </div>
       <div class="field"><label>Responsable *</label><select name="responsible" required><option value="">Selecciona...</option>${optionsFor(settings.staff, patient?.responsible)}</select></div>
       <div class="field full">
         <label>Tratamientos / Intereses *</label>
@@ -1309,6 +1375,23 @@ function renderPatientForm(editId) {
 }
 
 document.addEventListener('change', (e) => {
+  // Sugerencia automática del tipo de paciente (solo al CREAR; si la persona lo cambia a mano, ya no se toca):
+  //   origen "Convenio" → Convenio · país distinto de Colombia → Extranjero · lo demás → Normal
+  const typeSel = document.getElementById('patientTypeSelect');
+  if (typeSel && e.target) {
+    if (e.target === typeSel) {
+      typeSel.dataset.manual = '1';
+    } else if ((e.target.name === 'origin' || e.target.name === 'countryOfOrigin')
+      && typeSel.dataset.autosuggest === '1' && typeSel.dataset.manual !== '1') {
+      const form = typeSel.closest('form');
+      const origin = form.querySelector('[name=origin]').value;
+      const country = (form.querySelector('[name=countryOfOrigin]').value || '').trim().toLowerCase();
+      let suggested = 'normal';
+      if (origin === 'o6') suggested = 'convenio';
+      else if (country && country !== 'colombia') suggested = 'extranjero';
+      if ([...typeSel.options].some(o => o.value === suggested)) typeSel.value = suggested;
+    }
+  }
   if (e.target && e.target.name === 'status') {
     const reasonGroup = document.getElementById('inactivityReasonGroup');
     if (reasonGroup) {
@@ -1481,8 +1564,70 @@ function renderFollowUpForm(editId) {
   `;
 }
 
+/* ============================== PERIODO (mensual / quincenal) ==============================
+   Un solo "corte" compartido por Finanzas y Reportes. Quincena 1 = días 1–15, quincena 2 = día 16
+   hasta fin de mes. En la vista quincenal los salarios fijos y los costos fijos mensuales se
+   cuentan al 50 % en cada quincena (así las dos quincenas suman exactamente el mes). */
+const reportPeriod = {
+  mode: 'mensual',                              // 'mensual' | 'quincenal'
+  month: todayISO().slice(0, 7),                // 'YYYY-MM'
+  half: Number(todayISO().slice(8, 10)) <= 15 ? 1 : 2,
+};
+// Fecha local 'YYYY-MM-DD' de un valor que puede ser fecha simple o timestamp ISO (UTC).
+function localDateOf(value) {
+  if (!value) return '';
+  const str = String(value);
+  if (str.length <= 10) return str;
+  const d = new Date(str);
+  if (isNaN(d)) return str.slice(0, 10);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function periodRange() {
+  const [y, m] = reportPeriod.month.split('-').map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const pad = n => String(n).padStart(2, '0');
+  let d1 = 1, d2 = lastDay;
+  if (reportPeriod.mode === 'quincenal') { if (reportPeriod.half === 1) d2 = 15; else d1 = 16; }
+  return { start: `${reportPeriod.month}-${pad(d1)}`, end: `${reportPeriod.month}-${pad(d2)}` };
+}
+function inPeriod(value) {
+  const d = localDateOf(value);
+  if (!d) return false;
+  const { start, end } = periodRange();
+  return d >= start && d <= end;
+}
+function periodLabel() {
+  const ml = monthLabel(reportPeriod.month);
+  if (reportPeriod.mode !== 'quincenal') return ml;
+  const { start, end } = periodRange();
+  return `${reportPeriod.half === 1 ? '1.ª' : '2.ª'} quincena de ${ml} (${Number(start.slice(8))}–${Number(end.slice(8))})`;
+}
+// Selector Mensual/Quincenal + mes (+ quincena). Se usa en Finanzas y en Reportes.
+function periodControlsHtml() {
+  const q = reportPeriod.mode === 'quincenal';
+  const btn = (mode, text) => `<button type="button" class="btn btn-sm period-mode-btn ${reportPeriod.mode === mode ? 'btn-primary' : 'btn-secondary'}" data-mode="${mode}">${text}</button>`;
+  return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+    <div style="display:inline-flex;gap:4px;">${btn('mensual', 'Mensual')}${btn('quincenal', 'Quincenal')}</div>
+    <input type="month" class="field-select period-month-input" value="${reportPeriod.month}">
+    ${q ? `<select class="field-select period-half-select">
+      <option value="1" ${reportPeriod.half === 1 ? 'selected' : ''}>1.ª quincena (1–15)</option>
+      <option value="2" ${reportPeriod.half === 2 ? 'selected' : ''}>2.ª quincena (16–fin)</option>
+    </select>` : ''}
+  </div>`;
+}
+function attachPeriodControls() {
+  document.querySelectorAll('.period-mode-btn').forEach(b => b.addEventListener('click', () => {
+    reportPeriod.mode = b.dataset.mode; router();
+  }));
+  document.querySelectorAll('.period-month-input').forEach(i => i.addEventListener('change', () => {
+    if (i.value) { reportPeriod.month = i.value; router(); }
+  }));
+  document.querySelectorAll('.period-half-select').forEach(sel => sel.addEventListener('change', () => {
+    reportPeriod.half = Number(sel.value); router();
+  }));
+}
+
 /* ============================== FINANZAS ============================== */
-let financeMonth = todayISO().slice(0, 7); // 'YYYY-MM'
 
 function formatCOP(n) { return '$' + Math.round(n || 0).toLocaleString('es-CO'); }
 function moneyBarItem(label, value, max, color) {
@@ -1520,8 +1665,14 @@ function renderFinance() {
   }
   const settings = getSettings();
   const patients = getPatients();
-  const month = financeMonth;
-  const txMonth = getFinanceTx().filter(t => (t.date || '').slice(0, 7) === month);
+  const month = reportPeriod.month;
+  const quincenal = reportPeriod.mode === 'quincenal';
+  const factor = quincenal ? 0.5 : 1;            // salarios y costos fijos mensuales: 50 % por quincena
+  const periodText = periodLabel();
+  const estePer = quincenal ? 'esta quincena' : 'este mes';
+  const delPer = quincenal ? 'de la quincena' : 'del mes';
+  const monthTx = getFinanceTx().filter(t => (t.date || '').slice(0, 7) === month);   // todo el mes
+  const txMonth = getFinanceTx().filter(t => inPeriod(t.date));                      // solo el periodo
   const ingresos = txMonth.filter(t => t.type === 'ingreso');
   const gastosVariables = txMonth.filter(t => t.type === 'gasto' && t.category !== '__payroll');
   const pagosNomina = txMonth.filter(t => t.type === 'gasto' && t.category === '__payroll');
@@ -1529,28 +1680,57 @@ function renderFinance() {
   const totalIngresos = ingresos.reduce((s, t) => s + t.amount, 0);
   // Si ya registraste un movimiento para un costo fijo este mes, ese movimiento reemplaza
   // al valor automático (así no se cuenta dos veces).
-  const registeredCats = new Set(gastosVariables.map(t => t.category));
+  // (se mira el MES completo: si el costo se registró en cualquier quincena, no se suma el automático en ninguna)
+  const registeredCats = new Set(monthTx.filter(t => t.type === 'gasto' && t.category !== '__payroll').map(t => t.category));
   const fixedPending = fixedActive.filter(c => !registeredCats.has(c.id));
-  const totalFijos = fixedPending.reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  const totalFijos = fixedPending.reduce((s, c) => s + (Number(c.amount) || 0) * factor, 0);
   const totalGastosManual = gastosVariables.reduce((s, t) => s + t.amount, 0);
 
   const staffList = settings.staff.filter(s => s.active !== false);
   const hasSalary = s => s.payType === 'fijo' || s.payType === 'mixto';
   const hasCommission = s => s.payType === 'comision' || s.payType === 'mixto';
   const nominaFija = staffList.filter(hasSalary)
-    .reduce((sum, s) => sum + (Number(s.monthlySalary) || 0), 0);
+    .reduce((sum, s) => sum + (Number(s.monthlySalary) || 0), 0) * factor;
+  // Procedimientos realizados en el mes (base de las TARIFAS FIJAS): uno por cada procedimiento de
+  // cada visita (aunque se haya cobrado $0) + los ingresos manuales que no vienen de una visita.
+  const procedimientos = [];
+  getVisits().filter(v => inPeriod(v.date)).forEach(v => {
+    (v.items || []).forEach(i => procedimientos.push({ staffId: v.responsible, treatmentId: i.treatmentId || '' }));
+  });
+  ingresos.filter(t => !t.visitId).forEach(t => procedimientos.push({ staffId: t.responsible, treatmentId: t.category || '' }));
+
   const comisiones = staffList.filter(hasCommission).map(s => {
-    const rates = s.commissionByTreatment || {};
-    const defaultPct = Number(s.commissionPercent) || 0;
-    const byTreat = {};
-    ingresos.filter(t => t.responsible === s.id).forEach(t => {
-      const key = t.category || '';
-      const pct = rates[key] !== undefined ? Number(rates[key]) : defaultPct;
-      if (!byTreat[key]) byTreat[key] = { produccion: 0, pct, comision: 0 };
-      byTreat[key].produccion += t.amount;
-      byTreat[key].comision += t.amount * pct / 100;
-    });
-    const lines = Object.entries(byTreat).map(([treatmentId, v]) => ({ treatmentId, ...v }));
+    let lines;
+    if (s.commissionMode === 'flat') {
+      // TARIFA FIJA: (n.º de procedimientos de ese tratamiento) × (tarifa fija configurada)
+      const flatRates = s.flatByTreatment || {};
+      const defaultFlat = Number(s.commissionFlat) || 0;
+      const byTreat = {};
+      procedimientos.filter(p => p.staffId === s.id).forEach(p => {
+        const rate = flatRates[p.treatmentId] !== undefined ? Number(flatRates[p.treatmentId]) : defaultFlat;
+        if (!byTreat[p.treatmentId]) byTreat[p.treatmentId] = { mode: 'flat', count: 0, rate, produccion: 0, comision: 0 };
+        byTreat[p.treatmentId].count += 1;
+        byTreat[p.treatmentId].comision += rate;
+      });
+      ingresos.filter(t => t.responsible === s.id).forEach(t => {
+        const key = t.category || '';
+        if (byTreat[key]) byTreat[key].produccion += t.amount;
+      });
+      lines = Object.entries(byTreat).map(([treatmentId, v]) => ({ treatmentId, ...v }));
+    } else {
+      // PORCENTAJE: % del valor cobrado (el % del tratamiento, o el % por defecto)
+      const rates = s.commissionByTreatment || {};
+      const defaultPct = Number(s.commissionPercent) || 0;
+      const byTreat = {};
+      ingresos.filter(t => t.responsible === s.id).forEach(t => {
+        const key = t.category || '';
+        const pct = rates[key] !== undefined ? Number(rates[key]) : defaultPct;
+        if (!byTreat[key]) byTreat[key] = { mode: 'percent', produccion: 0, pct, comision: 0 };
+        byTreat[key].produccion += t.amount;
+        byTreat[key].comision += t.amount * pct / 100;
+      });
+      lines = Object.entries(byTreat).map(([treatmentId, v]) => ({ treatmentId, ...v }));
+    }
     return {
       staffId: s.id, nombre: s.name, lines,
       produccion: lines.reduce((sum, l) => sum + l.produccion, 0),
@@ -1563,7 +1743,7 @@ function renderFinance() {
   // ("Registrar pago") por MÁS de eso (p. ej. el miembro no tiene salario configurado), lo
   // pagado de más cuenta como salario: así ningún pago de nómina queda fuera de los gastos.
   const payrollRows = staffList.map(s => {
-    const salaryCfg = hasSalary(s) ? (Number(s.monthlySalary) || 0) : 0;
+    const salaryCfg = hasSalary(s) ? (Number(s.monthlySalary) || 0) * factor : 0;
     const c = comisiones.find(x => x.staffId === s.id) || { comision: 0, lines: [] };
     const generado = ingresos.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
     const pagado = pagosNomina.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
@@ -1572,7 +1752,8 @@ function renderFinance() {
     const extra = pagado; 
     const salary = salaryCfg + extra;
     const total = salary + c.comision;
-    const tipo = s.payType === 'mixto' ? 'Salario fijo + comisión' : s.payType === 'comision' ? 'Solo comisión' : 'Salario fijo mensual';
+    const modoComision = s.commissionMode === 'flat' ? 'tarifa fija' : 'comisión';
+    const tipo = s.payType === 'mixto' ? `Salario fijo + ${modoComision}` : s.payType === 'comision' ? `Solo ${modoComision}` : 'Salario fijo mensual';
     return { s, tipo, salary, extra, lines: c.lines, comision: c.comision, generado, total, pagado, pendiente: Math.max(0, total - pagado) };
   });
   // Pagos de nómina sin miembro asignado (o de alguien que ya no está activo)
@@ -1588,11 +1769,11 @@ function renderFinance() {
   // --- Barra de margen de utilidad ---
   let marginPct = totalIngresos > 0 ? Math.round((utilidad / totalIngresos) * 100) : null;
   let marginColor = 'var(--color-accent-red)';
-  let marginLabel = 'Sin ingresos registrados este mes todavía.';
+  let marginLabel = `Sin ingresos registrados ${estePer} todavía.`;
   if (marginPct !== null) {
-    if (marginPct >= 30) { marginColor = 'var(--color-accent-green)'; marginLabel = 'Buen margen este mes.'; }
+    if (marginPct >= 30) { marginColor = 'var(--color-accent-green)'; marginLabel = `Buen margen ${estePer}.`; }
     else if (marginPct >= 10) { marginColor = 'var(--color-accent-yellow)'; marginLabel = 'Margen ajustado — vale la pena revisar los gastos.'; }
-    else { marginColor = 'var(--color-accent-red)'; marginLabel = marginPct >= 0 ? 'Margen muy bajo este mes.' : 'Este mes se está perdiendo dinero.'; }
+    else { marginColor = 'var(--color-accent-red)'; marginLabel = marginPct >= 0 ? `Margen muy bajo ${estePer}.` : `${quincenal ? 'Esta quincena' : 'Este mes'} se está perdiendo dinero.`; }
   }
   const marginBarWidth = marginPct === null ? 0 : Math.max(0, Math.min(100, marginPct));
 
@@ -1604,7 +1785,7 @@ function renderFinance() {
   // --- Desglose "¿en qué se va la plata?" ---
   const gastoCategorias = {};
   gastosVariables.forEach(t => { const label = fixedCostLabel(t.category); gastoCategorias[label] = (gastoCategorias[label] || 0) + t.amount; });
-  fixedPending.forEach(c => { gastoCategorias[c.name] = (gastoCategorias[c.name] || 0) + (Number(c.amount) || 0); });
+  fixedPending.forEach(c => { gastoCategorias[c.name] = (gastoCategorias[c.name] || 0) + (Number(c.amount) || 0) * factor; });
   if (nominaGasto) gastoCategorias['Nómina fija'] = (gastoCategorias['Nómina fija'] || 0) + nominaGasto;
   if (totalComisiones) gastoCategorias['Comisiones'] = (gastoCategorias['Comisiones'] || 0) + totalComisiones;
   const gastoColors = ['var(--color-accent-red)', 'var(--color-primary)', 'var(--color-accent-yellow)', 'var(--color-accent-purple)', 'var(--color-text-faint)', 'var(--color-accent-green)'];
@@ -1628,7 +1809,7 @@ function renderFinance() {
   return `
   <div class="utility-bar-wrap" data-band="${marginPct === null ? 'none' : marginPct >= 30 ? 'good' : marginPct >= 10 ? 'mid' : 'low'}">
     <div class="utility-bar-head">
-      <span>Margen de utilidad — ${monthLabel(month)}</span>
+      <span>Margen de utilidad — ${periodText}</span>
       <strong style="color:${marginColor}">${marginPct === null ? '—' : marginPct + '%'}</strong>
     </div>
     <div class="utility-bar-track"><div class="utility-bar-fill" style="width:${marginBarWidth}%;background:${marginColor}"></div></div>
@@ -1638,31 +1819,31 @@ function renderFinance() {
   <div class="page-head">
     <div>
       <h1>Finanzas del Consultorio</h1>
-      <p class="subtitle">Ingresos, gastos y utilidad — información restringida al personal autorizado</p>
+      <p class="subtitle">Ingresos, gastos y utilidad — información restringida al personal autorizado${quincenal ? ' · En la vista quincenal, los salarios y costos fijos mensuales se cuentan al 50 % en cada quincena.' : ''}</p>
     </div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-      <input type="month" id="financeMonthInput" value="${month}" class="field-select">
+      ${periodControlsHtml()}
       <button class="btn btn-primary" id="addFinanceTxBtn">+ Registrar movimiento</button>
     </div>
   </div>
 
   <div class="grid-metrics">
-    ${metricCard('Ingresos del mes', formatCOP(totalIngresos), 'green')}
-    ${metricCard('Gastos del mes', formatCOP(totalGastos), 'red')}
+    ${metricCard(`Ingresos ${delPer}`, formatCOP(totalIngresos), 'green')}
+    ${metricCard(`Gastos ${delPer}`, formatCOP(totalGastos), 'red')}
     ${metricCard('Nómina + Comisiones', formatCOP(nominaGasto + totalComisiones), 'purple')}
     ${metricCard('Costos fijos incluidos', formatCOP(totalFijos), 'blue')}
-    ${metricCard('Utilidad del mes', formatCOP(utilidad), utilidad >= 0 ? 'green' : 'red')}
+    ${metricCard(`Utilidad ${delPer}`, formatCOP(utilidad), utilidad >= 0 ? 'green' : 'red')}
   </div>
 
   <div class="two-col">
     <div>
       <div class="card" style="margin-bottom:20px;">
-        <h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">Ingresos por Doctor(a) — ${monthLabel(month)}</h3>
-        ${doctorRows.length ? doctorRows.map((d, i) => moneyBarItem(d.name, d.value, maxDoctor, ['var(--color-accent-green)', 'var(--color-primary)', 'var(--color-accent-yellow)', 'var(--color-accent-purple)', 'var(--color-text-faint)'][i % 5])).join('') : emptyStateHtml('Sin ingresos registrados este mes', 'Registra el primer movimiento con "+ Registrar movimiento".')}
+        <h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">Ingresos por Doctor(a) — ${periodText}</h3>
+        ${doctorRows.length ? doctorRows.map((d, i) => moneyBarItem(d.name, d.value, maxDoctor, ['var(--color-accent-green)', 'var(--color-primary)', 'var(--color-accent-yellow)', 'var(--color-accent-purple)', 'var(--color-text-faint)'][i % 5])).join('') : emptyStateHtml(`Sin ingresos registrados ${estePer}`, 'Registra el primer movimiento con "+ Registrar movimiento".')}
       </div>
 
       <div class="section-card">
-        <div class="section-card-head"><h3>Nómina y Comisiones — ${monthLabel(month)}</h3></div>
+        <div class="section-card-head"><h3>Nómina y Comisiones — ${periodText}</h3></div>
         <div class="table-wrap">
           <table class="data-table">
             <thead><tr><th>Miembro del equipo</th><th>Salario fijo</th><th>Comisiones</th><th>Total a pagar</th><th>Pagado</th><th>Pendiente</th><th></th></tr></thead>
@@ -1672,14 +1853,14 @@ function renderFinance() {
                   <td>
                     <strong>${escapeHtml(r.s.name)}</strong>
                     <span class="text-faint" style="display:block;font-size:12px;">${r.tipo} · Generó: ${formatCOP(r.generado)}</span>
-                    ${r.lines.map(l => `<span class="text-faint" style="display:block;font-size:11.5px;">· ${l.treatmentId ? escapeHtml(treatmentLabel(l.treatmentId)) : 'Sin tratamiento'}: ${formatCOP(l.produccion)} × ${l.pct}% = ${formatCOP(l.comision)}</span>`).join('')}
+                    ${r.lines.map(l => `<span class="text-faint" style="display:block;font-size:11.5px;">· ${l.treatmentId ? escapeHtml(treatmentLabel(l.treatmentId)) : 'Sin tratamiento'}: ${l.mode === 'flat' ? `${l.count} procedimiento${l.count === 1 ? '' : 's'} × ${formatCOP(l.rate)} = ${formatCOP(l.comision)}` : `${formatCOP(l.produccion)} × ${l.pct}% = ${formatCOP(l.comision)}`}</span>`).join('')}
                   </td>
                   <td>${(hasSalary(r.s) || r.extra) ? formatCOP(r.salary) : '—'}${r.extra ? `<span class="text-faint" style="display:block;font-size:11px;">incluye ${formatCOP(r.extra)} pagados sin salario configurado</span>` : ''}</td>
                   <td>${hasCommission(r.s) ? formatCOP(r.comision) : '—'}</td>
                   <td><strong>${formatCOP(r.total)}</strong></td>
                   <td>${r.pagado ? formatCOP(r.pagado) : '—'}</td>
                   <td>${formatCOP(r.pendiente)}</td>
-                  <td><button class="btn btn-secondary btn-sm pay-staff-btn" data-id="${r.s.id}" data-amount="${Math.round(r.pendiente)}" data-concept="Nómina ${monthLabel(month)} — ${escapeHtml(r.s.name)}">Registrar pago</button></td>
+                  <td><button class="btn btn-secondary btn-sm pay-staff-btn" data-id="${r.s.id}" data-amount="${Math.round(r.pendiente)}" data-concept="Nómina ${periodText} — ${escapeHtml(r.s.name)}">Registrar pago</button></td>
                 </tr>`).join('') + (pagosSinAsignar ? `
                 <tr>
                   <td><strong>Otros pagos de nómina</strong><span class="text-faint" style="display:block;font-size:12px;">Pagos sin miembro del equipo asignado</span></td>
@@ -1688,7 +1869,7 @@ function renderFinance() {
             </tbody>
             ${payrollRows.length ? `<tfoot>
               <tr style="font-weight:700;border-top:2px solid var(--color-border);">
-                <td>Total del mes</td>
+                <td>Total ${delPer}</td>
                 <td>${formatCOP(nominaGasto)}</td>
                 <td>${formatCOP(totalComisiones)}</td>
                 <td>${formatCOP(nominaGasto + totalComisiones)}</td>
@@ -1700,7 +1881,7 @@ function renderFinance() {
           </table>
         </div>
         ${pagosNomina.length ? `<div class="section-card-body">
-          <p class="text-faint" style="font-size:12px;margin:8px 0 6px;">Pagos de nómina registrados este mes</p>
+          <p class="text-faint" style="font-size:12px;margin:8px 0 6px;">Pagos de nómina registrados ${estePer}</p>
           ${pagosNomina.map(t => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:4px 0;">
             <span>${formatDate(t.date)} · ${t.responsible ? escapeHtml(staffLabel(t.responsible)) : '—'}${t.description ? ' — ' + escapeHtml(t.description) : ''}</span>
             <strong>${formatCOP(t.amount)}</strong>
@@ -1709,7 +1890,7 @@ function renderFinance() {
       </div>
 
       <div class="section-card" style="margin-top:20px;">
-        <div class="section-card-head"><h3>Movimientos de ${monthLabel(month)}</h3></div>
+        <div class="section-card-head"><h3>Movimientos de ${periodText}</h3></div>
         <div class="table-wrap">
           <table class="data-table">
             <thead><tr><th>Fecha</th><th>Tipo</th><th>Categoría</th><th>Responsable</th><th>Paciente</th><th>Valor</th><th></th></tr></thead>
@@ -1723,7 +1904,7 @@ function renderFinance() {
                   <td>${t.patientId ? escapeHtml((getPatientById(t.patientId) || {}).fullName || '—') : '—'}</td>
                   <td>${formatCOP(t.amount)}</td>
                   <td>${t.visitId ? '<span class="text-faint" style="font-size:12px;">Desde visita</span>' : `<button class="action-link muted del-finance-btn" data-id="${t.id}">Eliminar</button>`}</td>
-                </tr>`).join('') : `<tr><td colspan="7">${emptyStateHtml('Sin movimientos este mes', 'Usa "+ Registrar movimiento" para agregar ingresos o gastos.')}</td></tr>`}
+                </tr>`).join('') : `<tr><td colspan="7">${emptyStateHtml(`Sin movimientos ${estePer}`, 'Usa "+ Registrar movimiento" para agregar ingresos o gastos.')}</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -1739,7 +1920,7 @@ function renderFinance() {
       </div>
       <div class="card" style="margin-bottom:20px;">
         <h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">¿En qué se va la plata?</h3>
-        ${gastoSegments.length ? donutChart(gastoSegments, gastoSegments.reduce((s, g) => s + g.value, 0) || 1, { money: true, centerValue: totalGastos, centerLabel: 'Gastos' }) : emptyStateHtml('Sin gastos registrados este mes', '')}
+        ${gastoSegments.length ? donutChart(gastoSegments, gastoSegments.reduce((s, g) => s + g.value, 0) || 1, { money: true, centerValue: totalGastos, centerLabel: 'Gastos' }) : emptyStateHtml(`Sin gastos registrados ${estePer}`, '')}
       </div>
       <div class="section-card">
         <div class="section-card-head">
@@ -1790,9 +1971,21 @@ function renderFinance() {
 function renderReports() {
   const patients = getPatients();
   const followUps = getFollowUps();
-  const completados = followUps.filter(f => f.status === 'completado').length;
-  const pendientes = followUps.filter(f => f.status === 'pendiente').length;
   const settings = getSettings();
+  const quincenal = reportPeriod.mode === 'quincenal';
+  const periodText = periodLabel();
+
+  // --- Indicadores del PERIODO seleccionado (cambian con Mensual / Quincenal) ---
+  const completados = followUps.filter(f => f.status === 'completado' && inPeriod(f.completedAt || f.dueDate)).length;
+  const pendientes = followUps.filter(f => f.status === 'pendiente' && inPeriod(f.dueDate)).length;
+  const nuevos = patients.filter(p => inPeriod(p.createdAt)).length;
+  const visitasPeriodo = getVisits().filter(v => inPeriod(v.date));
+  const atendidos = new Set(visitasPeriodo.map(v => v.patientId)).size;
+  const procCounts = {};
+  visitasPeriodo.forEach(v => (v.items || []).forEach(i => { procCounts[i.treatmentId] = (procCounts[i.treatmentId] || 0) + 1; }));
+  const byProcedure = Object.entries(procCounts).map(([id, value]) => ({ name: treatmentLabel(id), value }))
+    .sort((a, b) => b.value - a.value).slice(0, 6);
+  const maxProcedure = Math.max(1, ...byProcedure.map(p => p.value));
 
   const byOrigin = settings.origins.filter(o => o.active).map(o => ({ name: o.name, value: patients.filter(p => p.origin === o.id).length }))
     .sort((a, b) => b.value - a.value).slice(0, 5);
@@ -1804,21 +1997,32 @@ function renderReports() {
   const maxCountry = Math.max(1, ...byCountry.map(c => c.value));
   const maxOrigin = Math.max(1, ...byOrigin.map(o => o.value));
   const maxTreatment = Math.max(1, ...byTreatment.map(o => o.value));
-  const nuevos = patients.filter(p => p.status === 'nuevo').length;
   const activos = patients.filter(p => p.status === 'activo').length;
   const inactivos = patients.filter(p => p.status === 'inactivo').length;
   const sinContacto = patients.filter(p => p.status === 'no_reactivar').length;
 
   return `
   <div class="page-head">
-    <div><h1>Reportes e Indicadores</h1><p class="subtitle">Visión general y rendimiento administrativo de la clínica</p></div>
+    <div><h1>Reportes e Indicadores</h1><p class="subtitle">Rendimiento del consultorio — ${periodText}</p></div>
+    ${periodControlsHtml()}
   </div>
 
   <div class="grid-metrics">
-    ${metricCard('Seguimientos Completados', completados, 'green')}
-    ${metricCard('Seguimientos Pendientes', pendientes, 'blue')}
-    ${metricCard('Nuevos Pacientes', nuevos, 'yellow')}
-    ${metricCard('Sin Contacto (30+ días)', sinContacto, 'red')}
+    ${metricCard('Visitas realizadas', visitasPeriodo.length, 'blue')}
+    ${metricCard('Pacientes atendidos', atendidos, 'green')}
+    ${metricCard('Pacientes nuevos', nuevos, 'yellow')}
+    ${metricCard('Seguimientos completados', completados, 'green')}
+    ${metricCard('Seguimientos pendientes', pendientes, 'blue')}
+  </div>
+
+  <div class="card" style="margin-bottom:20px;">
+    <h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">Procedimientos realizados — ${periodText}</h3>
+    ${byProcedure.length ? byProcedure.map((p, i) => barItem(p.name, p.value, maxProcedure, ['var(--color-primary)', 'var(--color-accent-green)', 'var(--color-accent-yellow)', 'var(--color-accent-purple)', 'var(--color-text-faint)', 'var(--color-accent-red)'][i % 6], 'procedimientos')).join('') : emptyStateHtml(`Sin visitas registradas ${quincenal ? 'esta quincena' : 'este mes'}`, 'Los procedimientos aparecen al registrar visitas desde el perfil de cada paciente.')}
+  </div>
+
+  <div style="margin:26px 0 12px;">
+    <h2 style="font-size:16px;font-weight:700;">Estado actual de la base de pacientes</h2>
+    <p class="text-faint" style="font-size:12.5px;">Esta sección no cambia con el periodo: refleja a todos los pacientes registrados. Sin contacto (30+ días): <strong>${sinContacto}</strong>.</p>
   </div>
 
   <div class="two-col">
@@ -1872,10 +2076,10 @@ function renderReports() {
   </div>
   `;
 }
-function barItem(label, value, max, color) {
+function barItem(label, value, max, color, unit = 'pacientes') {
   const pct = max ? (value / max) * 100 : 0;
   return `<div class="bar-list-item">
-    <div class="bar-list-head"><span>${escapeHtml(label)}</span><strong>${value} pacientes</strong></div>
+    <div class="bar-list-head"><span>${escapeHtml(label)}</span><strong>${value} ${unit}</strong></div>
     <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
   </div>`;
 }
@@ -1884,6 +2088,7 @@ function barItem(label, value, max, color) {
 const SETTINGS_TABS = [
   { key: 'statuses', label: 'Estados de paciente' },
   { key: 'treatments', label: 'Tratamientos / Precios' },
+  { key: 'patientTypes', label: 'Tipos de paciente' },
   { key: 'fixedCosts', label: 'Costos fijos y variables' },
   { key: 'origins', label: 'Orígenes de paciente' },
   { key: 'taskTypes', label: 'Tipos de seguimiento' },
@@ -1925,9 +2130,9 @@ function renderSettings() {
         <div class="settings-catalog-row">
           <div class="settings-catalog-left">
             ${settingsActiveTab === 'statuses' ? badge(item.name, item.color) : isAccess ? `<strong>${escapeHtml(item.email)}</strong>` : `<strong>${escapeHtml(item.name)}</strong>`}
-            ${isTreatments ? `<span class="settings-catalog-desc">Precio actual: ${formatCOP(item.price)}</span>` : ''}
+            ${isTreatments ? `<span class="settings-catalog-desc">${escapeHtml(treatmentPriceSummary(item))}</span>` : ''}
             ${isCosts ? `<span class="settings-catalog-desc">${item.fixed ? 'Fijo mensual' : 'Variable'} · ${formatCOP(item.amount)}</span>` : ''}
-            ${isStaff ? `<span class="settings-catalog-desc">${item.payType === 'comision' ? `Solo comisión (${Object.keys(item.commissionByTreatment || {}).length} definidos · por defecto ${item.commissionPercent || 0}%)` : item.payType === 'mixto' ? `Fijo ${formatCOP(item.monthlySalary || 0)}/mes + comisión (${Object.keys(item.commissionByTreatment || {}).length} definidos · por defecto ${item.commissionPercent || 0}%)` : `Salario fijo: ${formatCOP(item.monthlySalary || 0)}/mes`}</span>` : ''}
+            ${isStaff ? `<span class="settings-catalog-desc">${escapeHtml(staffPayDescription(item))}</span>` : ''}
             ${item.desc && !isAccess ? `<span class="settings-catalog-desc">${escapeHtml(item.desc)}</span>` : ''}
             ${item.active === false ? `<span class="text-faint" style="font-size:11.5px;">Deshabilitado</span>` : ''}
           </div>
@@ -1951,7 +2156,12 @@ function renderSettings() {
         ` : `
           <div class="field"><label>Nombre *</label><input type="text" name="name" required></div>
           <div class="field mt-2"><label>Descripción</label><input type="text" name="desc"></div>
-          ${isTreatments ? `<div class="field mt-2"><label>Precio (COP) *</label><input type="number" min="0" step="1000" name="price" required></div>` : ''}
+          ${isTreatments ? `
+            <div class="field mt-2"><label>Precio paciente Normal (COP) *</label><input type="number" min="0" step="1000" name="price" required></div>
+            <p class="text-faint" style="font-size:12px;margin:12px 0 6px;">Precio para los otros tipos de paciente (vacío = usa el precio Normal):</p>
+            <div class="comm-grid">
+              ${(settings.patientTypes || []).filter(pt => pt.active !== false && pt.id !== 'normal').map(pt => `<label class="comm-item"><span>${escapeHtml(pt.name)}</span><input type="number" min="0" step="1000" name="price_${pt.id}" placeholder="—"></label>`).join('')}
+            </div>` : ''}
                     ${isCosts ? `
             <div class="field mt-2"><label>Valor mensual (COP) *</label><input type="number" min="0" step="1000" name="amount" required></div>
             <div class="checkbox-row mt-2"><input type="checkbox" id="optFixed" name="fixed"><label for="optFixed">Es un costo fijo (se repite todos los meses automáticamente)</label></div>
@@ -1966,10 +2176,25 @@ function renderSettings() {
             </div>
             <div class="field mt-2" id="staffSalaryField"><label>Salario fijo mensual (COP)</label><input type="number" min="0" step="1000" name="monthlySalary" value="0"></div>
             <div id="staffCommissionField">
-              <div class="field mt-2"><label>% por defecto (para tratamientos sin % propio)</label><input type="number" min="0" max="100" step="0.5" name="commissionPercent" value="0"></div>
-              <p class="text-faint" style="font-size:12px;margin:12px 0 6px;">% de comisión por tratamiento (vacío = usa el % por defecto):</p>
-              <div class="comm-grid">
-                ${settings.treatments.filter(t => t.active !== false).map(t => `<label class="comm-item"><span>${escapeHtml(t.name)}</span><input type="number" min="0" max="100" step="0.5" name="comm_${t.id}" placeholder="—"></label>`).join('')}
+              <div class="field mt-2"><label>¿Cómo se calcula lo que gana por cada procedimiento? *</label>
+                <select name="commissionMode" id="staffCommissionMode">
+                  <option value="percent">Porcentaje del valor cobrado</option>
+                  <option value="flat">Tarifa fija por procedimiento</option>
+                </select>
+              </div>
+              <div id="staffPercentFields">
+                <div class="field mt-2"><label>% por defecto (para tratamientos sin % propio)</label><input type="number" min="0" max="100" step="0.5" name="commissionPercent" value="0"></div>
+                <p class="text-faint" style="font-size:12px;margin:12px 0 6px;">% de comisión por tratamiento (vacío = usa el % por defecto):</p>
+                <div class="comm-grid">
+                  ${settings.treatments.filter(t => t.active !== false).map(t => `<label class="comm-item"><span>${escapeHtml(t.name)}</span><input type="number" min="0" max="100" step="0.5" name="comm_${t.id}" placeholder="—"></label>`).join('')}
+                </div>
+              </div>
+              <div id="staffFlatFields">
+                <div class="field mt-2"><label>Tarifa fija por defecto, por procedimiento (COP)</label><input type="number" min="0" step="1000" name="commissionFlat" value="0"></div>
+                <p class="text-faint" style="font-size:12px;margin:12px 0 6px;">Tarifa fija por tratamiento, en COP (vacío = usa la tarifa por defecto):</p>
+                <div class="comm-grid">
+                  ${settings.treatments.filter(t => t.active !== false).map(t => `<label class="comm-item"><span>${escapeHtml(t.name)}</span><input type="number" min="0" step="1000" name="flat_${t.id}" placeholder="—"></label>`).join('')}
+                </div>
               </div>
             </div>
           ` : ''}
@@ -1987,6 +2212,7 @@ function renderSettings() {
 /* ============================== EVENT WIRING PER VIEW ============================== */
 function attachViewHandlers(parts) {
   const route = parts[0];
+  attachPeriodControls();   // selector Mensual/Quincenal (Finanzas y Reportes)
 
   if (route === 'pacientes' && (!parts[1])) {
     patientListPage = 1;
@@ -2060,6 +2286,12 @@ function attachViewHandlers(parts) {
   }
 
   if (route === 'pacientes' && parts[1] && parts[1] !== 'nuevo' && !parts[2]) {
+    // Clasificación inmediata: al cambiar el tipo, la tarifa de las próximas visitas cambia en el acto.
+    const typeQuick = document.getElementById('patientTypeQuick');
+    if (typeQuick) typeQuick.addEventListener('change', () => {
+      updatePatient(parts[1], { patientType: typeQuick.value });
+      showToast('Tipo de paciente: ' + patientTypeLabel(typeQuick.value) + '. Se aplicará su tarifa en las visitas.');
+    });
     const addBtn = document.getElementById('addFollowUpBtn');
     if (addBtn) addBtn.addEventListener('click', openFollowUpModal);
     const cancelBtn = document.getElementById('cancelFollowUpModal');
@@ -2088,9 +2320,10 @@ function attachViewHandlers(parts) {
         .map(t => `<option value="${t.id}" data-price="${t.price || 0}">${escapeHtml(t.name)}</option>`).join('');
 
       // Precio por defecto del tratamiento (Configuración → Tratamientos)
+            // Precio según el TIPO del paciente (Configuración → Tratamientos / Precios)
+      const visitPatientType = (getPatientById(parts[1]) || {}).patientType || 'normal';
       function defaultPriceOf(sel) {
-        const o = sel.selectedOptions[0];
-        return Number(o && o.dataset.price) || 0;
+        return sel.value ? priceForTreatmentId(sel.value, visitPatientType) : 0;
       }
       // Valor específico escrito en la fila; si está vacío, el precio por defecto.
       function rowAmount(row) {
@@ -2216,13 +2449,25 @@ function attachViewHandlers(parts) {
       }
     }
     if (typeSelect) typeSelect.addEventListener('change', refreshCategoryOptions);
-    if (categorySelect) categorySelect.addEventListener('change', () => {
+        // Valor sugerido: si es un ingreso y hay paciente elegido, usa la tarifa de su TIPO de paciente.
+    const finPatientSelect = document.querySelector('#financeTxForm [name=patientId]');
+    let lastSuggested = '';
+    function suggestedAmount() {
       const opt = categorySelect.selectedOptions[0];
-      if (opt && opt.dataset.price) amountInput.value = opt.dataset.price;
+      if (!opt || !opt.value) return 0;
+      if (typeSelect.value !== 'ingreso') return Number(opt.dataset.price) || 0;
+      const patient = finPatientSelect && finPatientSelect.value ? getPatientById(finPatientSelect.value) : null;
+      return priceForTreatmentId(opt.value, patient ? patient.patientType : BASE_PATIENT_TYPE);
+    }
+    if (categorySelect) categorySelect.addEventListener('change', () => {
+      const price = suggestedAmount();
+      if (price) { amountInput.value = price; lastSuggested = String(price); }
     });
-
-    const monthInput = document.getElementById('financeMonthInput');
-    if (monthInput) monthInput.addEventListener('change', () => { financeMonth = monthInput.value; router(); });
+    // Al cambiar de paciente solo se reemplaza el valor si está vacío o si aún es el sugerido.
+    if (finPatientSelect) finPatientSelect.addEventListener('change', () => {
+      const price = suggestedAmount();
+      if (price && (!amountInput.value || amountInput.value === lastSuggested)) { amountInput.value = price; lastSuggested = String(price); }
+    });
 
     document.querySelectorAll('.pay-staff-btn').forEach(b => b.addEventListener('click', () => {
       modal.classList.add('open');
@@ -2234,6 +2479,12 @@ function attachViewHandlers(parts) {
       if (respSelect) respSelect.value = b.dataset.id;
       const descInput = document.querySelector('#financeTxForm [name=description]');
       if (descInput) descInput.value = b.dataset.concept;
+      // El pago queda dentro del periodo que se está viendo (si hoy cae fuera, usa el borde del periodo)
+      const dateInput = document.querySelector('#financeTxForm [name=date]');
+      if (dateInput) {
+        const { start, end } = periodRange(); const t = todayISO();
+        dateInput.value = t > end ? end : (t < start ? start : t);
+      }
     }));
 
     document.querySelectorAll('.del-finance-btn').forEach(b => b.addEventListener('click', () => {
@@ -2261,6 +2512,7 @@ function attachViewHandlers(parts) {
       document.getElementById('optionModalTitle').textContent = 'Agregar opción';
       document.getElementById('optionForm').reset();
       document.querySelector('#optionForm [name=optionId]').value = '';
+      toggleStaffPayFields();
       modal.classList.add('open');
     });
     function toggleStaffPayFields() {
@@ -2270,9 +2522,16 @@ function attachViewHandlers(parts) {
       const commissionField = document.getElementById('staffCommissionField');
       salaryField.style.display = (payType.value === 'fijo' || payType.value === 'mixto') ? '' : 'none';
       commissionField.style.display = (payType.value === 'comision' || payType.value === 'mixto') ? '' : 'none';
+      // Dentro de la comisión: se muestran los campos de % o los de tarifa fija, según lo elegido.
+      const mode = document.getElementById('staffCommissionMode');
+      const isFlat = !!mode && mode.value === 'flat';
+      document.getElementById('staffPercentFields').style.display = isFlat ? 'none' : '';
+      document.getElementById('staffFlatFields').style.display = isFlat ? '' : 'none';
     }
     const staffPayTypeSelect = document.getElementById('staffPayType');
     if (staffPayTypeSelect) staffPayTypeSelect.addEventListener('change', toggleStaffPayFields);
+    const staffModeSelect = document.getElementById('staffCommissionMode');
+    if (staffModeSelect) staffModeSelect.addEventListener('change', toggleStaffPayFields);
     toggleStaffPayFields();
 
     document.querySelectorAll('.edit-option-btn').forEach(b => b.addEventListener('click', () => {
@@ -2285,7 +2544,14 @@ function attachViewHandlers(parts) {
       } else {
         document.querySelector('#optionForm [name=name]').value = item.name;
         document.querySelector('#optionForm [name=desc]').value = item.desc || '';
-        if (settingsActiveTab === 'treatments') document.querySelector('#optionForm [name=price]').value = item.price || 0;
+        if (settingsActiveTab === 'treatments') {
+          document.querySelector('#optionForm [name=price]').value = item.price || 0;
+          const byType = item.priceByType || {};
+          (settings.patientTypes || []).forEach(pt => {
+            const inp = document.querySelector(`#optionForm [name="price_${pt.id}"]`);
+            if (inp) inp.value = byType[pt.id] ?? '';
+          });
+        }
         if (settingsActiveTab === 'fixedCosts') {
           document.querySelector('#optionForm [name=amount]').value = item.amount || 0;
           document.querySelector('#optionForm [name=fixed]').checked = !!item.fixed;
@@ -2298,6 +2564,13 @@ function attachViewHandlers(parts) {
           document.querySelector('#optionForm [name=payType]').value = item.payType || 'fijo';
           document.querySelector('#optionForm [name=monthlySalary]').value = item.monthlySalary || 0;
           document.querySelector('#optionForm [name=commissionPercent]').value = item.commissionPercent || 0;
+          document.querySelector('#optionForm [name=commissionMode]').value = item.commissionMode === 'flat' ? 'flat' : 'percent';
+          document.querySelector('#optionForm [name=commissionFlat]').value = item.commissionFlat || 0;
+          const flatRates = item.flatByTreatment || {};
+          settings.treatments.forEach(t => {
+            const inp = document.querySelector(`#optionForm [name="flat_${t.id}"]`);
+            if (inp) inp.value = flatRates[t.id] ?? '';
+          });
           const rates = item.commissionByTreatment || {};
           settings.treatments.forEach(t => {
             const inp = document.querySelector(`#optionForm [name="comm_${t.id}"]`);
@@ -2332,7 +2605,14 @@ function attachViewHandlers(parts) {
         payload = { email: (data.email || '').trim().toLowerCase(), name: data.email };
       } else {
         payload = { name: data.name, desc: data.desc };
-        if (settingsActiveTab === 'treatments') payload.price = Number(data.price) || 0;
+        if (settingsActiveTab === 'treatments') {
+          payload.price = Number(data.price) || 0;
+          const priceByType = {};
+          Object.keys(data).forEach(k => {
+            if (k.startsWith('price_') && data[k] !== '') priceByType[k.slice(6)] = Number(data[k]) || 0;
+          });
+          payload.priceByType = priceByType;
+        }
         if (settingsActiveTab === 'fixedCosts') { payload.amount = Number(data.amount) || 0; payload.fixed = data.fixed === 'on'; }
         if (settingsActiveTab === 'staff') {
           payload.payType = data.payType || 'fijo';
@@ -2343,6 +2623,13 @@ function attachViewHandlers(parts) {
             if (k.startsWith('comm_') && data[k] !== '') byTreatment[k.slice(5)] = Number(data[k]) || 0;
           });
           payload.commissionByTreatment = byTreatment;
+          payload.commissionMode = data.commissionMode === 'flat' ? 'flat' : 'percent';
+          payload.commissionFlat = Number(data.commissionFlat) || 0;
+          const flatByTreatment = {};
+          Object.keys(data).forEach(k => {
+            if (k.startsWith('flat_') && data[k] !== '') flatByTreatment[k.slice(5)] = Number(data[k]) || 0;
+          });
+          payload.flatByTreatment = flatByTreatment;
         }
       }
       if (data.optionId) {
