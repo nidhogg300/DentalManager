@@ -1215,7 +1215,7 @@ function renderPatientProfile(id) {
       <form id="visitForm">
         <div class="field"><label>Fecha *</label><input type="date" name="date" required value="${todayISO()}"></div>
         <div class="field mt-2"><label>Doctor(a) que atendió *</label><select name="responsible" id="visitDoctor" required><option value="">Selecciona...</option>${optionsFor(getSettings().staff, patient.responsible)}</select></div>
-        <p class="text-faint" style="font-size:12.5px;margin-top:12px;">Tarifa aplicada: <strong>${escapeHtml(patientTypeLabel(patient.patientType))}</strong> (se cambia en la ficha del paciente → Tipo de paciente)</p>
+        <p class="text-faint" style="font-size:12.5px;margin-top:12px;">Tarifa aplicada: <strong id="visitTariffLabel">${escapeHtml(patientTypeLabel(patient.patientType))}</strong> (se cambia en la ficha del paciente → Tipo de paciente)</p>
         <p class="text-faint" style="font-size:12px;margin:14px 0 6px;">Procedimientos realizados y valor a cobrar (si lo dejas vacío se usa el precio de Configuración)</p>
         <div id="visitItems"></div>
         <button type="button" class="btn btn-secondary btn-sm" id="addVisitItemBtn">+ Agregar otro procedimiento</button>
@@ -1566,8 +1566,9 @@ function renderFollowUpForm(editId) {
 
 /* ============================== PERIODO (mensual / quincenal) ==============================
    Un solo "corte" compartido por Finanzas y Reportes. Quincena 1 = días 1–15, quincena 2 = día 16
-   hasta fin de mes. En la vista quincenal los salarios fijos y los costos fijos mensuales se
-   cuentan al 50 % en cada quincena (así las dos quincenas suman exactamente el mes). */
+   hasta fin de mes. En la vista quincenal los salarios fijos se cuentan al 50 % en cada quincena,
+   y cada costo fijo en la quincena que se eligió en Configuración (o 50 % / 50 % por defecto);
+   así las dos quincenas suman exactamente el mes. */
 const reportPeriod = {
   mode: 'mensual',                              // 'mensual' | 'quincenal'
   month: todayISO().slice(0, 7),                // 'YYYY-MM'
@@ -1645,6 +1646,44 @@ function fixedCostLabel(id) {
   if (id === '__payroll') return 'Pago de nómina / comisiones';
   const c = getSettings().fixedCosts.find(x => x.id === id); return c ? c.name : (id || 'Gasto');
 }
+function fixedHalfLabel(h) {
+  return String(h) === '1' ? 'Se cobra en la 1.ª quincena (1–15)'
+    : String(h) === '2' ? 'Se cobra en la 2.ª quincena (16–fin)'
+    : 'Mitad y mitad (50 % en cada quincena)';
+}
+// Cómo se reparte un costo fijo mensual entre la 1.ª y la 2.ª quincena: [valor 1.ª, valor 2.ª]
+function fixedCostSplit(c) {
+  const m = Number(c.amount) || 0;
+  const h = String(c.half);
+  return h === '1' ? [m, 0] : h === '2' ? [0, m] : [m / 2, m / 2];
+}
+// 0 = 1.ª quincena (días 1–15), 1 = 2.ª quincena
+function halfIndexOf(date) { return Number(localDateOf(date).slice(8, 10)) <= 15 ? 0 : 1; }
+function paidByHalf(txList) {
+  const r = [0, 0];
+  txList.forEach(t => { r[halfIndexOf(t.date)] += Number(t.amount) || 0; });
+  return r;
+}
+/* PAGOS = ABONOS. Un pago NO suma un gasto nuevo: se descuenta de lo que se debía.
+   Lo pagado en el MES se aplica primero a lo que se debía en la 1.ª quincena y luego a la 2.ª
+   (así da igual en qué quincena se registre el pago). Solo lo que sobra, lo pagado de más, cuenta
+   como gasto adicional; se toma de los pagos más recientes. Devuelve lo que corresponde al periodo
+   que se está viendo (mes completo o una quincena). */
+function periodObligation(ob1, ob2, paid1, paid2) {
+  const paid = paid1 + paid2;
+  const cr1 = Math.min(ob1, paid);
+  const cr2 = Math.min(ob2, paid - cr1);
+  const exceso = Math.max(0, paid - cr1 - cr2);
+  const e2 = Math.min(exceso, paid2);
+  const e1 = exceso - e2;
+  const out = (obligacion, pagado, ex) => ({
+    obligacion, pagado, exceso: ex,
+    pendiente: Math.max(0, obligacion - pagado),
+    gasto: obligacion + ex,
+  });
+  if (reportPeriod.mode !== 'quincenal') return out(ob1 + ob2, cr1 + cr2, exceso);
+  return reportPeriod.half === 1 ? out(ob1, cr1, e1) : out(ob2, cr2, e2);
+}
 function financeTxCategoryLabel(tx) {
   return tx.type === 'ingreso' ? treatmentLabel(tx.category) : fixedCostLabel(tx.category);
 }
@@ -1667,23 +1706,26 @@ function renderFinance() {
   const patients = getPatients();
   const month = reportPeriod.month;
   const quincenal = reportPeriod.mode === 'quincenal';
-  const factor = quincenal ? 0.5 : 1;            // salarios y costos fijos mensuales: 50 % por quincena
+  const factor = quincenal ? 0.5 : 1;            // salarios fijos: 50 % por quincena
   const periodText = periodLabel();
   const estePer = quincenal ? 'esta quincena' : 'este mes';
   const delPer = quincenal ? 'de la quincena' : 'del mes';
   const monthTx = getFinanceTx().filter(t => (t.date || '').slice(0, 7) === month);   // todo el mes
   const txMonth = getFinanceTx().filter(t => inPeriod(t.date));                      // solo el periodo
   const ingresos = txMonth.filter(t => t.type === 'ingreso');
-  const gastosVariables = txMonth.filter(t => t.type === 'gasto' && t.category !== '__payroll');
-  const pagosNomina = txMonth.filter(t => t.type === 'gasto' && t.category === '__payroll');
   const fixedActive = settings.fixedCosts.filter(c => c.active !== false && c.fixed);
+  const fixedIds = new Set(fixedActive.map(c => c.id));
+  // Gastos "libres" (variables). Los pagos de costos fijos NO se suman aquí: abonan al costo fijo.
+  const gastosVariables = txMonth.filter(t => t.type === 'gasto' && t.category !== '__payroll' && !fixedIds.has(t.category));
+  const pagosNomina = txMonth.filter(t => t.type === 'gasto' && t.category === '__payroll');
   const totalIngresos = ingresos.reduce((s, t) => s + t.amount, 0);
-  // Si ya registraste un movimiento para un costo fijo este mes, ese movimiento reemplaza
-  // al valor automático (así no se cuenta dos veces).
-  // (se mira el MES completo: si el costo se registró en cualquier quincena, no se suma el automático en ninguna)
-  const registeredCats = new Set(monthTx.filter(t => t.type === 'gasto' && t.category !== '__payroll').map(t => t.category));
-  const fixedPending = fixedActive.filter(c => !registeredCats.has(c.id));
-  const totalFijos = fixedPending.reduce((s, c) => s + (Number(c.amount) || 0) * factor, 0);
+  // Cada costo fijo: lo que se debe en el periodo según su quincena, menos lo ya pagado (abonos).
+  const fixedRows = fixedActive.map(c => {
+    const [ob1, ob2] = fixedCostSplit(c);
+    const [p1, p2] = paidByHalf(monthTx.filter(t => t.type === 'gasto' && t.category === c.id));
+    return { c, ...periodObligation(ob1, ob2, p1, p2) };
+  });
+  const totalFijos = fixedRows.reduce((s, r) => s + r.gasto, 0);
   const totalGastosManual = gastosVariables.reduce((s, t) => s + t.amount, 0);
 
   const staffList = settings.staff.filter(s => s.active !== false);
@@ -1693,13 +1735,17 @@ function renderFinance() {
     .reduce((sum, s) => sum + (Number(s.monthlySalary) || 0), 0) * factor;
   // Procedimientos realizados en el mes (base de las TARIFAS FIJAS): uno por cada procedimiento de
   // cada visita (aunque se haya cobrado $0) + los ingresos manuales que no vienen de una visita.
-  const procedimientos = [];
-  getVisits().filter(v => inPeriod(v.date)).forEach(v => {
-    (v.items || []).forEach(i => procedimientos.push({ staffId: v.responsible, treatmentId: i.treatmentId || '' }));
-  });
-  ingresos.filter(t => !t.visitId).forEach(t => procedimientos.push({ staffId: t.responsible, treatmentId: t.category || '' }));
+  const buildProcedimientos = (ingresosX, inRange) => {
+    const procs = [];
+    getVisits().filter(v => inRange(v.date)).forEach(v => {
+      (v.items || []).forEach(i => procs.push({ staffId: v.responsible, treatmentId: i.treatmentId || '' }));
+    });
+    ingresosX.filter(t => !t.visitId).forEach(t => procs.push({ staffId: t.responsible, treatmentId: t.category || '' }));
+    return procs;
+  };
+  const procedimientos = buildProcedimientos(ingresos, inPeriod);
 
-  const comisiones = staffList.filter(hasCommission).map(s => {
+  const calcComisiones = (ingresos, procedimientos) => staffList.filter(hasCommission).map(s => {
     let lines;
     if (s.commissionMode === 'flat') {
       // TARIFA FIJA: (n.º de procedimientos de ese tratamiento) × (tarifa fija configurada)
@@ -1737,29 +1783,38 @@ function renderFinance() {
       comision: lines.reduce((sum, l) => sum + l.comision, 0),
     };
   });
+  const comisiones = calcComisiones(ingresos, procedimientos);
+  // Comisión de cada miembro en la 1.ª y en la 2.ª quincena del mes (para repartir sus pagos como abonos)
+  const lastDayOfMonth = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate();
+  const commissionsOfRange = (d1, d2) => {
+    const lo = `${month}-${String(d1).padStart(2, '0')}`, hi = `${month}-${String(d2).padStart(2, '0')}`;
+    const inR = v => { const d = localDateOf(v); return d >= lo && d <= hi; };
+    const ing = monthTx.filter(t => t.type === 'ingreso' && inR(t.date));
+    return Object.fromEntries(calcComisiones(ing, buildProcedimientos(ing, inR)).map(c => [c.staffId, c.comision]));
+  };
+  const comm1 = commissionsOfRange(1, 15), comm2 = commissionsOfRange(16, lastDayOfMonth);
   const totalComisiones = comisiones.reduce((sum, c) => sum + c.comision, 0);
 
-  // Nómina por persona = salario fijo configurado + comisiones. Si ya se registraron pagos
-  // ("Registrar pago") por MÁS de eso (p. ej. el miembro no tiene salario configurado), lo
-  // pagado de más cuenta como salario: así ningún pago de nómina queda fuera de los gastos.
+  // Nómina por persona: lo que se debe = salario fijo + comisiones del periodo. Los pagos
+  // ("Registrar pago") ABONAN a eso: bajan el pendiente y NO se suman al salario. Pagar por encima
+  // de lo debido se maneja con la forma de pago "Salario fijo + comisión"; si aun así se paga de más,
+  // el exceso se muestra aparte y cuenta como gasto (no se pierde plata de los reportes).
   const payrollRows = staffList.map(s => {
-    const salaryCfg = hasSalary(s) ? (Number(s.monthlySalary) || 0) * factor : 0;
+    const salaryM = hasSalary(s) ? (Number(s.monthlySalary) || 0) : 0;
     const c = comisiones.find(x => x.staffId === s.id) || { comision: 0, lines: [] };
     const generado = ingresos.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
-    const pagado = pagosNomina.filter(t => t.responsible === s.id).reduce((sum, t) => sum + t.amount, 0);
-    
-    // Todos los pagos manuales registrados en el mes se toman como valor extra/adicional
-    const extra = pagado; 
-    const salary = salaryCfg + extra;
-    const total = salary + c.comision;
+    const [p1, p2] = paidByHalf(monthTx.filter(t => t.type === 'gasto' && t.category === '__payroll' && t.responsible === s.id));
+    const st = periodObligation(salaryM / 2 + (comm1[s.id] || 0), salaryM / 2 + (comm2[s.id] || 0), p1, p2);
     const modoComision = s.commissionMode === 'flat' ? 'tarifa fija' : 'comisión';
     const tipo = s.payType === 'mixto' ? `Salario fijo + ${modoComision}` : s.payType === 'comision' ? `Solo ${modoComision}` : 'Salario fijo mensual';
-    return { s, tipo, salary, extra, lines: c.lines, comision: c.comision, generado, total, pagado, pendiente: Math.max(0, total - pagado) };
+    return { s, tipo, salary: salaryM * factor, lines: c.lines, comision: c.comision, generado, total: st.obligacion, pagado: st.pagado, pendiente: st.pendiente, exceso: st.exceso };
   });
-  // Pagos de nómina sin miembro asignado (o de alguien que ya no está activo)
+  // Pagos de nómina sin miembro asignado (o de alguien que ya no está activo): no hay a qué abonar
   const staffIds = new Set(staffList.map(s => s.id));
   const pagosSinAsignar = pagosNomina.filter(t => !staffIds.has(t.responsible)).reduce((sum, t) => sum + t.amount, 0);
-  const nominaGasto = nominaFija + payrollRows.reduce((a, r) => a + r.extra, 0) + pagosSinAsignar;
+  const sobrepagos = payrollRows.reduce((a, r) => a + r.exceso, 0);
+  const nominaGasto = nominaFija + sobrepagos + pagosSinAsignar;
+  const sumTotal = payrollRows.reduce((a, r) => a + r.total, 0);
   const sumPagado = payrollRows.reduce((a, r) => a + r.pagado, 0) + pagosSinAsignar;
   const sumPendiente = payrollRows.reduce((a, r) => a + r.pendiente, 0);
 
@@ -1785,7 +1840,7 @@ function renderFinance() {
   // --- Desglose "¿en qué se va la plata?" ---
   const gastoCategorias = {};
   gastosVariables.forEach(t => { const label = fixedCostLabel(t.category); gastoCategorias[label] = (gastoCategorias[label] || 0) + t.amount; });
-  fixedPending.forEach(c => { gastoCategorias[c.name] = (gastoCategorias[c.name] || 0) + (Number(c.amount) || 0) * factor; });
+  fixedRows.forEach(r => { if (r.gasto) gastoCategorias[r.c.name] = (gastoCategorias[r.c.name] || 0) + r.gasto; });
   if (nominaGasto) gastoCategorias['Nómina fija'] = (gastoCategorias['Nómina fija'] || 0) + nominaGasto;
   if (totalComisiones) gastoCategorias['Comisiones'] = (gastoCategorias['Comisiones'] || 0) + totalComisiones;
   const gastoColors = ['var(--color-accent-red)', 'var(--color-primary)', 'var(--color-accent-yellow)', 'var(--color-accent-purple)', 'var(--color-text-faint)', 'var(--color-accent-green)'];
@@ -1819,7 +1874,7 @@ function renderFinance() {
   <div class="page-head">
     <div>
       <h1>Finanzas del Consultorio</h1>
-      <p class="subtitle">Ingresos, gastos y utilidad — información restringida al personal autorizado${quincenal ? ' · En la vista quincenal, los salarios y costos fijos mensuales se cuentan al 50 % en cada quincena.' : ''}</p>
+      <p class="subtitle">Ingresos, gastos y utilidad — información restringida al personal autorizado${quincenal ? ' · En la vista quincenal, los salarios se cuentan al 50 % y cada costo fijo en la quincena elegida en Configuración.' : ''}</p>
     </div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
       ${periodControlsHtml()}
@@ -1855,10 +1910,10 @@ function renderFinance() {
                     <span class="text-faint" style="display:block;font-size:12px;">${r.tipo} · Generó: ${formatCOP(r.generado)}</span>
                     ${r.lines.map(l => `<span class="text-faint" style="display:block;font-size:11.5px;">· ${l.treatmentId ? escapeHtml(treatmentLabel(l.treatmentId)) : 'Sin tratamiento'}: ${l.mode === 'flat' ? `${l.count} procedimiento${l.count === 1 ? '' : 's'} × ${formatCOP(l.rate)} = ${formatCOP(l.comision)}` : `${formatCOP(l.produccion)} × ${l.pct}% = ${formatCOP(l.comision)}`}</span>`).join('')}
                   </td>
-                  <td>${(hasSalary(r.s) || r.extra) ? formatCOP(r.salary) : '—'}${r.extra ? `<span class="text-faint" style="display:block;font-size:11px;">incluye ${formatCOP(r.extra)} pagados sin salario configurado</span>` : ''}</td>
+                  <td>${hasSalary(r.s) ? formatCOP(r.salary) : '—'}</td>
                   <td>${hasCommission(r.s) ? formatCOP(r.comision) : '—'}</td>
                   <td><strong>${formatCOP(r.total)}</strong></td>
-                  <td>${r.pagado ? formatCOP(r.pagado) : '—'}</td>
+                  <td>${r.pagado ? formatCOP(r.pagado) : '—'}${r.exceso ? `<span class="text-faint" style="display:block;font-size:11px;">+${formatCOP(r.exceso)} pagados de más (cuentan como gasto)</span>` : ''}</td>
                   <td>${formatCOP(r.pendiente)}</td>
                   <td><button class="btn btn-secondary btn-sm pay-staff-btn" data-id="${r.s.id}" data-amount="${Math.round(r.pendiente)}" data-concept="Nómina ${periodText} — ${escapeHtml(r.s.name)}">Registrar pago</button></td>
                 </tr>`).join('') + (pagosSinAsignar ? `
@@ -1870,9 +1925,9 @@ function renderFinance() {
             ${payrollRows.length ? `<tfoot>
               <tr style="font-weight:700;border-top:2px solid var(--color-border);">
                 <td>Total ${delPer}</td>
-                <td>${formatCOP(nominaGasto)}</td>
+                <td>${formatCOP(nominaFija + pagosSinAsignar)}</td>
                 <td>${formatCOP(totalComisiones)}</td>
-                <td>${formatCOP(nominaGasto + totalComisiones)}</td>
+                <td>${formatCOP(sumTotal + pagosSinAsignar)}</td>
                 <td>${formatCOP(sumPagado)}</td>
                 <td>${formatCOP(sumPendiente)}</td>
                 <td></td>
@@ -1880,6 +1935,7 @@ function renderFinance() {
             </tfoot>` : ''}
           </table>
         </div>
+        ${sobrepagos ? `<div class="section-card-body"><p class="text-faint" style="font-size:12px;margin:8px 0 0;">Los pagos se descuentan de lo que se debe (no se suman al salario). Hay ${formatCOP(sobrepagos)} pagados por encima de lo debido: se cuentan como gasto adicional. Si quieres pagar siempre por encima del fijo, usa la forma de pago "Salario fijo + comisión".</p></div>` : ''}
         ${pagosNomina.length ? `<div class="section-card-body">
           <p class="text-faint" style="font-size:12px;margin:8px 0 6px;">Pagos de nómina registrados ${estePer}</p>
           ${pagosNomina.map(t => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:4px 0;">
@@ -1928,8 +1984,14 @@ function renderFinance() {
           <a href="#/configuracion" class="btn-link">Editar valores</a>
         </div>
         <div class="section-card-body">
-          <p class="text-faint" style="font-size:12px;margin-bottom:8px;">Costos fijos (se incluyen automáticamente cada mes):</p>
-          ${settings.fixedCosts.filter(c => c.active !== false && c.fixed).map(c => `<div class="info-row"><span class="info-label">${escapeHtml(c.name)}</span><span class="info-value">${formatCOP(c.amount)}</span></div>`).join('') || `<p class="text-faint" style="font-size:12.5px;">Sin costos fijos configurados.</p>`}
+          <p class="text-faint" style="font-size:12px;margin-bottom:8px;">Costos fijos de ${periodText}. Los pagos que registres se descuentan de cada valor (no se suman):</p>
+          ${fixedRows.map(r => `<div class="info-row" style="align-items:center;">
+            <span class="info-label">${escapeHtml(r.c.name)}<span class="text-faint" style="display:block;font-size:11.5px;">${quincenal && !r.obligacion ? 'No se cobra en esta quincena' : fixedHalfLabel(r.c.half)}</span></span>
+            <span class="info-value">${formatCOP(r.obligacion)}
+              ${r.pagado ? `<span class="text-faint" style="display:block;font-size:11.5px;font-weight:400;">Pagado ${formatCOP(r.pagado)}${r.exceso ? ` (+${formatCOP(r.exceso)} de más)` : ''}</span>` : ''}
+              ${Math.round(r.pendiente) > 0 ? `<button class="btn btn-secondary btn-sm pay-fixed-btn" style="margin-top:4px;" data-id="${r.c.id}" data-amount="${Math.round(r.pendiente)}" data-concept="${escapeHtml(r.c.name)} ${escapeHtml(periodText)}">Pagar ${formatCOP(r.pendiente)}</button>` : (r.obligacion ? '<span class="text-faint" style="display:block;font-size:11.5px;font-weight:400;color:var(--color-accent-green);">✓ Al día</span>' : '')}
+            </span>
+          </div>`).join('') || `<p class="text-faint" style="font-size:12.5px;">Sin costos fijos configurados.</p>`}
         </div>
       </div>
     </div>
@@ -2121,7 +2183,7 @@ function renderSettings() {
     <div class="section-card-head">
       <div>
         <h3>${tabInfo.label}</h3>
-        <p class="text-faint" style="font-size:12.5px;margin-top:2px;">${isTreatments ? 'Los valores fijados aquí se usan como precio sugerido en Finanzas; edítalos solo cuando cambien.' : isCosts ? 'Los costos marcados como "fijos" se incluyen automáticamente cada mes en Finanzas, sin necesidad de volver a registrarlos.' : isAccess ? 'Solo las cuentas (correo de inicio de sesión) listadas aquí pueden ver la pestaña Finanzas. Si la lista está vacía, cualquier cuenta puede verla.' : 'Define las opciones disponibles en los formularios del sistema'}</p>
+        <p class="text-faint" style="font-size:12.5px;margin-top:2px;">${isTreatments ? 'Los valores fijados aquí se usan como precio sugerido en Finanzas; edítalos solo cuando cambien.' : isCosts ? 'Los costos marcados como "fijos" se incluyen automáticamente cada mes en Finanzas. Elige en qué quincena se cobra cada uno; los pagos que registres se descuentan de ese valor, no se suman.' : isAccess ? 'Solo las cuentas (correo de inicio de sesión) listadas aquí pueden ver la pestaña Finanzas. Si la lista está vacía, cualquier cuenta puede verla.' : 'Define las opciones disponibles en los formularios del sistema'}</p>
       </div>
       <button class="btn btn-primary btn-sm" id="addOptionBtn">+ Agregar ${isAccess ? 'correo' : 'opción'}</button>
     </div>
@@ -2131,7 +2193,7 @@ function renderSettings() {
           <div class="settings-catalog-left">
             ${settingsActiveTab === 'statuses' ? badge(item.name, item.color) : isAccess ? `<strong>${escapeHtml(item.email)}</strong>` : `<strong>${escapeHtml(item.name)}</strong>`}
             ${isTreatments ? `<span class="settings-catalog-desc">${escapeHtml(treatmentPriceSummary(item))}</span>` : ''}
-            ${isCosts ? `<span class="settings-catalog-desc">${item.fixed ? 'Fijo mensual' : 'Variable'} · ${formatCOP(item.amount)}</span>` : ''}
+            ${isCosts ? `<span class="settings-catalog-desc">${item.fixed ? 'Fijo mensual' : 'Variable'} · ${formatCOP(item.amount)}${item.fixed ? ' · ' + fixedHalfLabel(item.half) : ''}</span>` : ''}
             ${isStaff ? `<span class="settings-catalog-desc">${escapeHtml(staffPayDescription(item))}</span>` : ''}
             ${item.desc && !isAccess ? `<span class="settings-catalog-desc">${escapeHtml(item.desc)}</span>` : ''}
             ${item.active === false ? `<span class="text-faint" style="font-size:11.5px;">Deshabilitado</span>` : ''}
@@ -2165,6 +2227,13 @@ function renderSettings() {
                     ${isCosts ? `
             <div class="field mt-2"><label>Valor mensual (COP) *</label><input type="number" min="0" step="1000" name="amount" required></div>
             <div class="checkbox-row mt-2"><input type="checkbox" id="optFixed" name="fixed"><label for="optFixed">Es un costo fijo (se repite todos los meses automáticamente)</label></div>
+            <div class="field mt-2"><label>¿En qué mitad del mes se cobra? (aplica en la vista quincenal)</label>
+              <select name="half">
+                <option value="split">Mitad y mitad (50 % en cada quincena)</option>
+                <option value="1">1.ª quincena (días 1–15)</option>
+                <option value="2">2.ª quincena (día 16 – fin de mes)</option>
+              </select>
+            </div>
           ` : ''}
           ${isStaff ? `
             <div class="field mt-2"><label>Forma de pago *</label>
@@ -2290,7 +2359,7 @@ function attachViewHandlers(parts) {
     const typeQuick = document.getElementById('patientTypeQuick');
     if (typeQuick) typeQuick.addEventListener('change', () => {
       updatePatient(parts[1], { patientType: typeQuick.value });
-      showToast('Tipo de paciente: ' + patientTypeLabel(typeQuick.value) + '. Se aplicará su tarifa en las visitas.');
+      showToast('Tipo de paciente: ' + patientTypeLabel(typeQuick.value) + '. Su tarifa ya se aplica en las visitas.');
     });
     const addBtn = document.getElementById('addFollowUpBtn');
     if (addBtn) addBtn.addEventListener('click', openFollowUpModal);
@@ -2321,9 +2390,11 @@ function attachViewHandlers(parts) {
 
       // Precio por defecto del tratamiento (Configuración → Tratamientos)
             // Precio según el TIPO del paciente (Configuración → Tratamientos / Precios)
-      const visitPatientType = (getPatientById(parts[1]) || {}).patientType || 'normal';
+      // El tipo de paciente se consulta EN EL MOMENTO de usarlo (no se guarda al abrir la ficha),
+      // así el cambio del selector "Tipo de paciente" se aplica de inmediato sin recargar.
+      const currentPatientType = () => (getPatientById(parts[1]) || {}).patientType || BASE_PATIENT_TYPE;
       function defaultPriceOf(sel) {
-        return sel.value ? priceForTreatmentId(sel.value, visitPatientType) : 0;
+        return sel.value ? priceForTreatmentId(sel.value, currentPatientType()) : 0;
       }
       // Valor específico escrito en la fila; si está vacío, el precio por defecto.
       function rowAmount(row) {
@@ -2335,6 +2406,18 @@ function attachViewHandlers(parts) {
         itemsBox.querySelectorAll('.visit-item-row').forEach(row => { total += rowAmount(row); });
         summary.textContent = `Total a cobrar al paciente: ${formatCOP(total)}`;
       }
+      // Actualiza la etiqueta de tarifa y los precios sugeridos de las filas con el tipo actual
+      function refreshVisitTariff() {
+        const lbl = document.getElementById('visitTariffLabel');
+        if (lbl) lbl.textContent = patientTypeLabel(currentPatientType());
+        itemsBox.querySelectorAll('.visit-item-row').forEach(row => {
+          const sel = row.querySelector('select'), inp = row.querySelector('input');
+          inp.placeholder = sel.value ? `Por defecto ${formatCOP(defaultPriceOf(sel))}` : 'Valor a cobrar';
+        });
+        refreshVisitSummary();
+      }
+      const typeQuickSel = document.getElementById('patientTypeQuick');
+      if (typeQuickSel) typeQuickSel.addEventListener('change', refreshVisitTariff);
       function addVisitRow() {
         const row = document.createElement('div');
         row.className = 'visit-item-row';
@@ -2359,7 +2442,7 @@ function attachViewHandlers(parts) {
       if (addVisitBtn) addVisitBtn.addEventListener('click', () => {
         itemsBox.innerHTML = '';
         addVisitRow();
-        refreshVisitSummary();
+        refreshVisitTariff();
         visitModal.classList.add('open');
       });
       document.getElementById('addVisitItemBtn').addEventListener('click', addVisitRow);
@@ -2487,6 +2570,21 @@ function attachViewHandlers(parts) {
       }
     }));
 
+    document.querySelectorAll('.pay-fixed-btn').forEach(b => b.addEventListener('click', () => {
+      modal.classList.add('open');
+      typeSelect.value = 'gasto';
+      refreshCategoryOptions();
+      categorySelect.value = b.dataset.id;
+      amountInput.value = b.dataset.amount;
+      const descInput = document.querySelector('#financeTxForm [name=description]');
+      if (descInput) descInput.value = b.dataset.concept;
+      const dateInput = document.querySelector('#financeTxForm [name=date]');
+      if (dateInput) {
+        const { start, end } = periodRange(); const t = todayISO();
+        dateInput.value = t > end ? end : (t < start ? start : t);
+      }
+    }));
+
     document.querySelectorAll('.del-finance-btn').forEach(b => b.addEventListener('click', () => {
       deleteFinanceTx(b.dataset.id);
       showToast('Movimiento eliminado');
@@ -2555,10 +2653,7 @@ function attachViewHandlers(parts) {
         if (settingsActiveTab === 'fixedCosts') {
           document.querySelector('#optionForm [name=amount]').value = item.amount || 0;
           document.querySelector('#optionForm [name=fixed]').checked = !!item.fixed;
-        }
-        if (settingsActiveTab === 'fixedCosts') {
-          document.querySelector('#optionForm [name=amount]').value = item.amount || 0;
-          document.querySelector('#optionForm [name=fixed]').checked = !!item.fixed;
+          document.querySelector('#optionForm [name=half]').value = ['1', '2'].includes(String(item.half)) ? String(item.half) : 'split';
         }
         if (settingsActiveTab === 'staff') {
           document.querySelector('#optionForm [name=payType]').value = item.payType || 'fijo';
@@ -2613,7 +2708,11 @@ function attachViewHandlers(parts) {
           });
           payload.priceByType = priceByType;
         }
-        if (settingsActiveTab === 'fixedCosts') { payload.amount = Number(data.amount) || 0; payload.fixed = data.fixed === 'on'; }
+        if (settingsActiveTab === 'fixedCosts') {
+          payload.amount = Number(data.amount) || 0;
+          payload.fixed = data.fixed === 'on';
+          payload.half = ['1', '2'].includes(data.half) ? data.half : 'split';
+        }
         if (settingsActiveTab === 'staff') {
           payload.payType = data.payType || 'fijo';
           payload.monthlySalary = Number(data.monthlySalary) || 0;
